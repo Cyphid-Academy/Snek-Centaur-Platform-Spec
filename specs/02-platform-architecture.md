@@ -217,3 +217,558 @@
 **Decision**: B — name WebSocket explicitly in client-connection requirements.
 **Rationale**: SpacetimeDB itself is a hard architectural choice for the game runtime (not an implementation detail), and the WebSocket client protocol is imposed by SpacetimeDB. Since the platform commits to SpacetimeDB, it inherits the WebSocket constraint, and that constraint should be visible in requirements so that downstream modules ([04], [09]) plan around it rather than presuming transport flexibility that does not exist. The "no implementation artifacts" rule applies to internal implementation choices (libraries, table names), not to the external contract surface of a chosen runtime.
 **Affected requirements/design elements**: 02-REQ-023 (Centaur Server → STDB, now "WebSocket subscription"), 02-REQ-038 (operator → STDB, now "via WebSocket"), 02-REQ-041 (spectator → STDB, now "via WebSocket"). 02-REQ-009 was left behavioral ("real-time state synchronization without per-turn polling") because it describes what the runtime delivers, not how a specific client connects; flag if this should also be updated.
+
+---
+
+## Design
+
+### 2.9 Runtime Topology and Data Ownership
+
+Satisfies 02-REQ-001, 02-REQ-002, 02-REQ-003, 02-REQ-004, 02-REQ-005, 02-REQ-006.
+
+The platform is composed of exactly three runtime kinds, each with a distinct lifecycle and data ownership scope:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Convex (Single Deployment)                      │
+│  Persistent state: users, teams, rooms, games, replays, centaur state  │
+│  Identity & credential infrastructure (owned by [03])                  │
+│  Game lifecycle orchestration                                          │
+└──────────┬──────────────────┬──────────────────────┬────────────────────┘
+           │ HTTP/Convex       │ HTTP/Convex           │ Convex client
+           │ client            │ client                │
+┌──────────▼──────────┐  ┌────▼─────────────────┐  ┌──▼───────────────────┐
+│ SpacetimeDB Instance│  │ Centaur Server (Team) │  │ Game Platform        │
+│ (per started game)  │◄─┤ WebSocket subscription│  │ (Svelte web app)     │
+│                     │  │ to STDB               │  │                      │
+│ Transient game state│  │ Bot computation       │  │ Cross-team UI        │
+│ Authoritative rules │  │ Operator web app      │  │ Spectator UI         │
+│ Append-only log     │  │ Convex subscription   │  └──────────┬───────────┘
+└──────────▲──────────┘  └───────────────────────┘             │
+           │ WebSocket                                         │ WebSocket
+           │                                                   │ (spectator)
+     ┌─────┴──────────┐                                  ┌─────▼──────────┐
+     │ Operator Client │                                  │ Spectator      │
+     │ (dual-connect)  │                                  │ Client         │
+     └────────────────┘                                  └────────────────┘
+```
+
+**Data ownership boundaries**:
+
+| Runtime | Owns | Lifetime |
+|---------|------|----------|
+| **Convex** | All persistent platform state: user accounts, Centaur Team records, room records, game records, replays, Centaur Server registry, game configuration, per-team Centaur subsystem state (snake config, drives, bot params, action log) | Permanent (single deployment) |
+| **SpacetimeDB instance** | Transient game state: board, snake states, items, staged moves, time budgets, turn events — all as an append-only log sufficient for full game reconstruction | Bounded to a single game: provisioned at launch, torn down after game end + replay persist |
+| **Centaur Server** | No persistent state of its own. Reads game state from SpacetimeDB, reads/writes Centaur subsystem state to Convex. Compute state (game tree cache, bot working memory) is ephemeral | Operated by each team; active during games |
+
+**Instance isolation** (02-REQ-004). Each SpacetimeDB instance is deployed as an independent module instance with its own database. No cross-instance data access exists at the SpacetimeDB platform level. This isolation is load-bearing for security: a compromised Centaur Server authenticated to game X cannot read or write game Y's state.
+
+**Centaur Team registration** (02-REQ-005, 02-REQ-006). Every Centaur Team has exactly one registered Centaur Server (identified by domain). The platform enforces that a team cannot join a game without a registered server. There are no pure-human teams.
+
+### 2.10 SpacetimeDB Game Runtime Design
+
+Satisfies 02-REQ-007 through 02-REQ-014.
+
+**Authoritative turn resolution** (02-REQ-007, 02-REQ-008). The SpacetimeDB module imports the shared engine codebase ([02-REQ-035]) and invokes `resolveTurn()` (from Module 01's exported interface, Section 3.8) inside a `resolve_turn` reducer. Because SpacetimeDB reducers execute as single ACID transactions, the entire eleven-phase pipeline either completes and commits or is rolled back entirely. No other runtime calls `resolveTurn()` authoritatively — the Centaur Server library uses it for simulation only (02-REQ-036), and web clients use it for pre-validation and rendering only (02-REQ-037).
+
+**Real-time synchronization** (02-REQ-009). SpacetimeDB provides automatic real-time state synchronization to connected clients via subscription queries. When a reducer commits new rows (e.g., new `snake_states` entries after turn resolution), all subscribers whose subscription queries match the new data receive updates without polling. This is a platform-provided capability of SpacetimeDB, not custom application code.
+
+**Invisibility filtering** (02-REQ-010). Row-Level Security (RLS) on the snake state data filters rows where the snake's derived `visible` value (per [01-REQ-023]) is `false` from connections belonging to opponent teams. The RLS rule cross-references the querying connection's team membership (established during registration) against the snake's `teamId`. Same-team connections see all snakes regardless of visibility. The RLS mechanism is owned by [04]; this module specifies the architectural requirement that filtering occurs at the data access layer within SpacetimeDB, not at the application layer in clients. This ensures that even a Centaur Server that bypasses the library cannot observe invisible opponent snakes, satisfying 02-REQ-033's security model.
+
+**Staged moves and last-write-wins** (02-REQ-011, 02-REQ-012). A mutable `staged_moves` table keyed by `snakeId` holds at most one staged move per snake. Any authorized writer (Centaur Server or human operator for the snake's team) can upsert into this table; the most recent write wins. At turn resolution, the `resolve_turn` reducer reads all staged moves, passes them to `resolveTurn()` as `stagedMoves: ReadonlyMap<SnakeId, StagedMove>`, and clears the table — all within the same ACID transaction (02-REQ-008). The `StagedMove.stagedBy` field (from Module 01's exported `Agent` type) is captured before clearing, for inclusion in `snake_moved` turn events (per [01-REQ-052]).
+
+**Append-only game log** (02-REQ-013, 02-REQ-014). The SpacetimeDB schema is organized as an append-only log: turn-keyed tables (`snake_states`, `turn_events`, `item_lifetimes`, `time_budget_states`, `turns`) append new rows each turn without mutating prior rows. Static tables (`game_config`, `board`, `team_permissions`) are written once at initialization. This structure enables any prior turn's board state to be reconstructed directly via a turn-number query, without consulting Convex or any external system. At game end, the complete log is exported to Convex for persistent replay storage (02-REQ-022); no per-turn posting is needed during gameplay. The specific table schemas and query patterns are owned by [04].
+
+### 2.11 Convex Platform Runtime Design
+
+Satisfies 02-REQ-015 through 02-REQ-022a, 02-REQ-050, 02-REQ-051.
+
+**Persistent state home** (02-REQ-015). All state that must outlive a game lives in the single Convex deployment. The Convex schema is partitioned between platform-wide tables (owned by [05]) and Centaur-subsystem tables (owned by [06]). Both table sets live in the same Convex schema namespace and share a single transactional boundary, which is why the "exactly one Convex deployment" constraint (02-REQ-002) is load-bearing — downstream modules rely on cross-table transactional consistency (e.g., enforcing selection invariants across `snake_config` rows atomically).
+
+**Identity infrastructure** (02-REQ-016). Convex hosts all authentication mechanisms: Google OAuth for humans, challenge-callback for Centaur Servers, JWT issuance with HMAC signing for SpacetimeDB admission tickets. The specific mechanisms are owned by [03]; module 02 establishes that Convex is the sole host.
+
+**Selection discipline** (02-REQ-017, 02-REQ-018). The mapping of human operators to snakes (selection state) is owned by Convex, not SpacetimeDB. SpacetimeDB authorizes at the team level only — any connection authenticated as a member of team T can stage moves for any snake belonging to T. The at-most-one-operator-per-snake and at-most-one-snake-per-operator invariants (02-REQ-018) are enforced by Convex function contracts in the Centaur subsystem (owned by [06]). This separation means SpacetimeDB's authorization model is simple (team-scoped), while fine-grained operator coordination is handled by Convex where the Centaur subsystem state already lives.
+
+**Game record lifecycle** (02-REQ-050, 02-REQ-051). A game record in Convex progresses through three states:
+
+```typescript
+type GameStatus = 'not-started' | 'playing' | 'finished'
+```
+
+1. **`not-started`**: The game record exists in Convex with a mutable configuration. Permitted users may edit configuration parameters. No SpacetimeDB instance exists. This is the state after room creation, after successor auto-creation (02-REQ-051), and before launch.
+
+2. **`playing`**: At launch, the configuration is frozen (becomes immutable), and a fresh SpacetimeDB instance is provisioned (02-REQ-019). The frozen config is supplied to the `initialize_game` reducer. The game record stores the SpacetimeDB instance URL for client connection. The transition from `not-started` to `playing` is irreversible.
+
+3. **`finished`**: The game has ended. The SpacetimeDB instance has pushed a game-end notification to Convex (02-REQ-022a). Convex has obtained the complete game log and persisted it as replay data (02-REQ-022). The SpacetimeDB instance is torn down (02-REQ-021).
+
+**SpacetimeDB instance provisioning** (02-REQ-019, 02-REQ-020). At game launch, Convex:
+
+1. Freezes the game configuration (02-REQ-050).
+2. Provisions a fresh SpacetimeDB instance via SpacetimeDB's cloud provisioning API.
+3. Deploys the game engine module to the instance.
+4. Calls the `initialize_game` reducer with the frozen config, team membership, and HMAC secret.
+5. Updates the game record with the instance URL and transitions status to `playing`.
+
+Each game gets its own freshly provisioned instance (02-REQ-020). This applies uniformly to all game-creation paths: first game in a room, successor games, tournament rounds. The provisioning API mechanics and reducer signatures are owned by [04] and [05].
+
+**Game-end notification and replay persistence** (02-REQ-022, 02-REQ-022a). Convex does not hold a live subscription to any SpacetimeDB instance during gameplay. Instead, when the SpacetimeDB instance detects a terminal game state (via Phase 10 of turn resolution), it pushes a notification to Convex via a mechanism owned by [04]. Upon receiving the notification, Convex:
+
+1. Obtains the complete append-only game log from the SpacetimeDB instance.
+2. Persists the log as replay data in the `replays` table.
+3. Updates the game record with final scores and transitions status to `finished`.
+4. Triggers SpacetimeDB instance teardown (02-REQ-021).
+5. Auto-creates a successor game if applicable (02-REQ-051).
+
+The retrieval pattern (Convex-pull vs. runtime-push vs. bundled in notification) is at [04]/[05]'s discretion per the requirement.
+
+**Successor game auto-creation** (02-REQ-051). After a game ends, Convex creates a new `not-started` game record in the same room, inheriting configuration from the predecessor. No SpacetimeDB instance is provisioned — the successor remains in the `not-started` state until explicitly launched. This is uniform across tournament and non-tournament paths; tournament mode simply chains launches automatically after the configured interlude, rather than waiting for manual launch.
+
+### 2.12 Centaur Server Runtime Design
+
+Satisfies 02-REQ-023 through 02-REQ-029.
+
+**Dual subscription model**. Each Centaur Server maintains two concurrent subscriptions during gameplay:
+
+1. **SpacetimeDB WebSocket subscription** (02-REQ-023): Connects to the game's SpacetimeDB instance using a Convex-issued admission ticket ([03]). Subscribes to game state tables (snake states, items, time budgets, turn events) filtered by RLS. Receives real-time turn-resolution updates. Stages bot-computed moves via the `stage_move` reducer (02-REQ-026).
+
+2. **Convex subscription** (02-REQ-024): Connects to Convex using a Convex-issued JWT ([03]). Subscribes to the team's Centaur subsystem state — snake configuration, active Drives, heuristic configuration, and bot parameters (specific table schemas owned by [06]). Writes state updates (snake state maps, worst-case worlds, annotations, heuristic outputs) and action log entries to Convex (02-REQ-027).
+
+**Bot computation** (02-REQ-025). The Centaur Server runs the bot framework ([07]) for every snake belonging to its team that is not currently in manual mode with a human operator's staged move taking precedence. The bot framework uses the shared engine codebase ([02-REQ-036]) for game-state simulation and world-tree exploration. Compute scheduling prioritizes automatic-mode snakes, then selected-manual snakes, then unselected-manual snakes (owned by [07]).
+
+**Operator web application** (02-REQ-028). The Centaur Server serves the operator web application over HTTP to authenticated team members. Authentication verifies team membership — only members of the Centaur Server's team may access the operator UI. The operator web app connects to both SpacetimeDB and Convex as described in Section 2.15.
+
+**Healthcheck** (02-REQ-029). The Centaur Server exposes a `GET /healthcheck` endpoint. The platform calls this endpoint:
+- When a Centaur Server is registered or its domain is updated.
+- When a team joins a game lobby (pre-launch readiness check).
+- On operator-initiated wake-up requests (ping button in room lobby UI).
+
+The healthcheck response indicates availability; the platform records health status and last-checked timestamp in the Centaur Server registry (table schema owned by [05]).
+
+### 2.13 Centaur Server Library Design
+
+Satisfies 02-REQ-030 through 02-REQ-033.
+
+**Library composition** (02-REQ-030). The Centaur Server library is a TypeScript package that bundles:
+
+| Component | Source Module | Purpose |
+|-----------|--------------|---------|
+| Bot framework | [07] | Drive/Preference evaluation, game tree cache, anytime submission pipeline, softmax decision |
+| Auth handler | [03] | Challenge-callback endpoint (`/.well-known/centaur-challenge`), JWT refresh loop |
+| Healthcheck handler | [02] | `GET /healthcheck` endpoint implementation |
+| Convex schema bindings | [05], [06] | Typed client for reading/writing Centaur subsystem state |
+| Shared engine codebase | [01] via [02-REQ-034] | Domain types and turn-resolution for simulation |
+| Reference operator web app | [08] | Default operator UI; customizable by teams |
+
+**Supported implementation path** (02-REQ-031). The Centaur Server library is the architecturally assumed way to build a Centaur Server. Platform documentation, example code, and support workflows treat library-based servers as the standard case. Teams that bypass the library and implement a Centaur Server from scratch must handle authentication, healthcheck, Convex state management, and bot computation independently. The platform is not obligated to accommodate non-library implementations — bugs or integration issues arising from bypassing the library are the team's responsibility. This does not affect security invariants, which are enforced externally regardless of library use (02-REQ-033).
+
+**Extension surface** (02-REQ-032). The library exposes exactly three extension points:
+
+```typescript
+interface CentaurServerConfig {
+  readonly drives: ReadonlyArray<DriveRegistration>
+  readonly preferences: ReadonlyArray<PreferenceRegistration>
+  readonly operatorApp?: OperatorAppCustomization
+}
+```
+
+- **(a) Custom Drive implementations**: Teams register `Drive<T>` implementations conforming to [07]'s exported interface. Each Drive has a target type (`Snake` or `Cell`), scoring function, and eligible-targets predicate.
+- **(b) Custom Preference implementations**: Teams register `Preference` implementations conforming to [07]'s exported interface. Preferences are directionless heuristics (no target).
+- **(c) Operator web app customization**: Teams may optionally replace or extend the reference operator web application. The customization surface is bounded to UI presentation; the data layer (Convex subscriptions, SpacetimeDB connection) is not customizable.
+
+No other extension points exist. The library does not expose hooks for overriding authentication, healthcheck, bot scheduling, or the anytime submission pipeline.
+
+**Security independence** (02-REQ-033). The platform's security invariants are enforced entirely outside the library:
+
+| Invariant | Enforcement point |
+|-----------|-------------------|
+| Move staging restricted to team's snakes | SpacetimeDB `stage_move` reducer validates team membership via `team_permissions` table |
+| Invisible snakes hidden from opponents | SpacetimeDB RLS filters at the data layer |
+| Admission ticket validity | SpacetimeDB `register` reducer validates HMAC signature |
+| Selection discipline (≤1 operator per snake) | Convex function contracts in [06] |
+| Centaur Server identity | Challenge-callback protocol in [03] |
+
+A Centaur Server that bypasses the library entirely and speaks the raw SpacetimeDB WebSocket protocol + Convex HTTP API is bound by the same invariants. The library provides convenience, not security.
+
+### 2.14 Shared Engine Codebase Design
+
+Satisfies 02-REQ-034 through 02-REQ-037.
+
+**Codebase structure**. The shared engine is a single TypeScript package (e.g., `@team-snek/engine`) that re-exports Module 01's domain types and entry points:
+
+```typescript
+export {
+  Direction, CellType, ItemType, BoardSize, EffectFamily, EffectState,
+  Cell, SnakeId, TeamId, ItemId, TurnNumber, CentaurId, OperatorId,
+  Agent, BOARD_DIMENSIONS, invulnerabilityLevel, isVisible,
+  PotionEffect, SnakeState, ItemState, Board, TeamClockState,
+  GameConfig, GameOutcome, TurnEvent, DeathCause,
+  BoardGenerationFailure, StagedMove, Rng, rngFromSeed, subSeed,
+  generateBoardAndInitialState, resolveTurn,
+} from './game-rules'
+```
+
+**Consumer contexts**. The codebase runs in three distinct environments:
+
+| Consumer | Runtime Context | Usage | Authority |
+|----------|----------------|-------|-----------|
+| SpacetimeDB game module | SpacetimeDB TypeScript module runtime | `resolveTurn()` inside `resolve_turn` reducer; `generateBoardAndInitialState()` inside `initialize_game` reducer | **Authoritative** — only execution whose output becomes committed game state |
+| Centaur Server library | Node.js (or Deno/Bun) server | `resolveTurn()` for simulation/world-tree exploration; domain types for state interpretation | **Simulation only** — output used for bot decisions, never committed directly |
+| Web clients (operator + spectator + Game Platform) | Browser | Domain types for rendering; `resolveTurn()` for pre-validation and animation prediction; `invulnerabilityLevel()` / `isVisible()` for display logic | **Display only** — output used for rendering, never committed |
+
+**Compatibility constraint**. Because the codebase executes in three different JavaScript runtimes, it must:
+- Use only ECMAScript standard library APIs (no Node.js-specific APIs, no browser-specific APIs).
+- Export pure functions with no side effects beyond the `Rng` state parameter.
+- Use the specified BLAKE3 implementation for `subSeed()` (per Module 01 DOWNSTREAM IMPACT note 4), which must be available as a dependency in all three environments.
+- Use the flat `ReadonlyArray<CellType>` board encoding with `y * width + x` indexing (per Module 01 DOWNSTREAM IMPACT note 3).
+
+**Rationale for single codebase vs. separate implementations**. A single codebase eliminates the class of bugs where the authoritative server and simulation clients disagree on game rules. Given that SpacetimeDB's TypeScript module support runs standard ECMAScript, there is no technical barrier to sharing. The alternative — separate implementations in each consumer — would require continuous parity testing and triple the maintenance surface for any rule change.
+
+### 2.15 Human Client Topology Design
+
+Satisfies 02-REQ-038 through 02-REQ-042.
+
+**Operator dual-connection model** (02-REQ-038, 02-REQ-039). Each human operator's browser client maintains two simultaneous connections:
+
+```
+Operator Browser
+├── WebSocket → SpacetimeDB instance
+│   ├── Subscribe: game state (filtered by RLS)
+│   ├── Call: stage_move(snakeId, direction)
+│   └── Call: declare_turn_over(teamId)
+│
+└── Convex client → Convex deployment
+    ├── Subscribe: Centaur subsystem state (selection, drives, bot params, heuristics)
+    ├── Mutate: selection state (select/deselect snake, toggle manual mode)
+    ├── Mutate: Drive assignments (add, remove, reweight)
+    └── Mutate: action log (append action entries)
+```
+
+The SpacetimeDB connection provides low-latency game state and real-time move staging. The Convex connection provides Centaur subsystem state (which is not in SpacetimeDB) and supports the operator coordination features (selection, Drive management, action logging). Both connections authenticate independently: the SpacetimeDB connection uses an HMAC-signed admission ticket ([03]), and the Convex connection uses the operator's Google OAuth session.
+
+**Spectator connection** (02-REQ-041). Spectators connect to SpacetimeDB via WebSocket using a read-only admission ticket ([03]). Read-only tickets authorize subscription queries but do not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectator connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). Spectators do not connect to Convex; they have no access to Centaur subsystem state.
+
+**Operator web app serving** (02-REQ-040). The operator web application is served by the team's Centaur Server, not by the Game Platform. This means the operator UI is a separate deployed application from the Game Platform, satisfying 02-REQ-042. The Centaur Server serves static assets (HTML, JS, CSS) over HTTP and the browser client establishes the dual connections described above.
+
+### 2.16 Game Platform vs. Centaur Server Boundary Design
+
+Satisfies 02-REQ-043 through 02-REQ-049.
+
+**Two distinct applications**. The platform comprises two web applications with non-overlapping UI scope:
+
+| Application | Served By | Technology | Scope |
+|-------------|-----------|------------|-------|
+| **Game Platform** | Platform infrastructure (e.g., Vercel, Cloudflare) | Svelte ([09]) | Cross-team: home, team identity management, Centaur Server registration, member management, timekeeper assignment, room browsing/creation, room lobby/game config, live spectating, platform replay viewer, player profiles, team profiles, leaderboards |
+| **Centaur Server Web App** | Each team's Centaur Server | Determined by library reference app ([08]) | Team-internal: heuristic config, bot parameter config, live operator interface, team-perspective replay viewer with sub-turn timeline |
+
+**Negative boundary constraints**. The following are architectural constraints, not just UI omissions — they reflect the data ownership model:
+
+- The Game Platform has no access to bot parameters, heuristic configuration, or Drive state (02-REQ-045, 02-REQ-046, 02-REQ-047). These are Centaur subsystem concerns written and read through the Centaur Server's Convex subscription. The Game Platform's Convex queries should not read Centaur subsystem data.
+- The Game Platform's team management page exposes only identity, server registration, member management, and timekeeper assignment (02-REQ-048). It does not expose per-snake configuration, Drive portfolios, or temperature settings.
+- The Centaur Server web application does not provide room creation, room browsing, leaderboards, or platform-wide profiles (02-REQ-049). It has no concept of "rooms" or "the platform" — it operates within the scope of a single team's games.
+
+**Rationale**. This boundary cleanly separates concerns: the Game Platform handles everything visible to all users (public/cross-team), while the Centaur Server web app handles everything that is competitive-sensitive and team-internal. This separation means a team's bot strategy configuration is never exposed through the Game Platform's Convex queries, even accidentally. It also allows teams to customize their operator UI (02-REQ-032c) without affecting the platform-wide experience.
+
+---
+
+## REVIEW Items (Design Phase)
+
+### 02-REVIEW-006: Replay data retrieval pattern
+
+**Type**: Ambiguity
+**Context**: 02-REQ-022 allows any retrieval pattern for obtaining the game log from SpacetimeDB at game end — Convex-pull, runtime-push, or bundled in the game-end notification. The design section (2.11) describes the flow abstractly without committing to a specific pattern, because the choice is owned by [04] and [05].
+**Question**: Should module 02's design commit to a specific retrieval pattern, or leave it to downstream modules as currently drafted?
+**Options**:
+- A: Leave to [04]/[05] — module 02 specifies only that retrieval and persistence must complete before teardown.
+- B: Commit to Convex-pull (Convex calls a SpacetimeDB HTTP endpoint to fetch the log).
+- C: Commit to runtime-push (SpacetimeDB pushes the log to a Convex HTTP action in the game-end notification).
+**Informal spec reference**: §9.4 step 8, §13.1.
+
+### 02-REVIEW-007: Spectator visibility — no-team vs. opponent-equivalent
+
+**Type**: Ambiguity
+**Context**: 02-REQ-041 states spectators are subject to invisibility filtering "on the same terms as opponent team connections." Spectators belong to no team. The RLS rule must determine what a no-team connection sees. Two interpretations: (a) spectators see the union of what all teams see (i.e., all snakes including invisible ones), or (b) spectators see the intersection (i.e., invisible snakes of *every* team are hidden). The requirement text ("on the same terms as opponent team connections") implies (b) — spectators are treated as opponents of all teams.
+**Question**: Confirm that spectators cannot see any team's invisible snakes (option B), consistent with the requirement text.
+**Options**:
+- A: Spectators see all snakes (union). Invisible snakes are hidden only from opponent *team* connections, not from unaffiliated spectators.
+- B: Spectators see no invisible snakes (intersection). They are treated as opponents of every team for RLS purposes.
+**Informal spec reference**: §8.5 ("Spectators connect with a read-only admission ticket").
+
+---
+
+## Exported Interfaces
+
+This section is the minimal contract module 02 exposes to downstream modules (03, 04, 05, 06). Any type or concept not listed here is a module-internal detail and may change without impacting downstream modules.
+
+### 3.1 Runtime Kind Enumeration
+
+Motivated by 02-REQ-001.
+
+```typescript
+export const enum RuntimeKind {
+  SpacetimeDB = 'spacetimedb',
+  Convex = 'convex',
+  CentaurServer = 'centaur_server',
+}
+```
+
+### 3.2 Game Record Lifecycle Types
+
+Motivated by 02-REQ-003, 02-REQ-019, 02-REQ-020, 02-REQ-021, 02-REQ-050, 02-REQ-051.
+
+```typescript
+export type GameStatus = 'not-started' | 'playing' | 'finished'
+
+export interface GameRecordLifecycle {
+  readonly status: GameStatus
+  readonly spacetimeDbUrl: string | null
+}
+```
+
+Downstream modules ([05]) use `GameStatus` to model the game record's state machine in Convex. The `spacetimeDbUrl` is `null` when `status === 'not-started'`, populated when `status === 'playing'`, and retained for reference when `status === 'finished'` (until teardown completes).
+
+**State transitions** (exported as an architectural constraint, not a runtime type):
+
+```
+not-started ──[launch]──► playing ──[game-end + replay persist]──► finished
+```
+
+- `not-started → playing`: Config is frozen (02-REQ-050), fresh SpacetimeDB instance provisioned (02-REQ-019, 02-REQ-020).
+- `playing → finished`: Game-end notification received from SpacetimeDB (02-REQ-022a), replay persisted (02-REQ-022), instance torn down (02-REQ-021).
+- No backward transitions. `not-started → finished` is not valid (a game must be launched before it can end).
+
+### 3.3 Data Ownership Boundaries
+
+Motivated by 02-REQ-002, 02-REQ-013, 02-REQ-015, 02-REQ-017.
+
+Exported as architectural constraints that downstream modules must respect:
+
+| Data Category | Owner | Constraint |
+|---------------|-------|------------|
+| All persistent platform state | Convex (single deployment, 02-REQ-002) | Downstream modules [05], [06] define schemas within the single Convex namespace |
+| Transient game state (board, snakes, items, moves, clock, events) | SpacetimeDB instance (per game, 02-REQ-003) | [04] defines the schema; data does not outlive the instance except via replay export |
+| Game state log for replay | SpacetimeDB during gameplay → Convex after game end | [04] defines the append-only schema; [05] defines the Convex `replays` table |
+| Selection state (operator↔snake mapping) | Convex (02-REQ-017) | [06] enforces the at-most-one invariant (02-REQ-018); SpacetimeDB has no concept of selection |
+| Identity & credentials | Convex (02-REQ-016) | [03] defines mechanisms; all auth flows terminate at Convex |
+
+### 3.4 SpacetimeDB Instance Lifecycle Contract
+
+Motivated by 02-REQ-003, 02-REQ-019, 02-REQ-020, 02-REQ-021, 02-REQ-022.
+
+```typescript
+export interface SpacetimeDbInstanceLifecycle {
+  readonly provision: {
+    readonly trigger: 'game-launch'
+    readonly freshPerGame: true
+    readonly inputFromConvex: {
+      readonly frozenConfig: GameConfig
+      readonly teamMembership: ReadonlyArray<TeamMembershipRecord>
+      readonly hmacSecret: Uint8Array
+    }
+  }
+  readonly teardown: {
+    readonly trigger: 'replay-persisted'
+    readonly precondition: 'game-ended AND replay data obtained by Convex'
+  }
+}
+
+export interface TeamMembershipRecord {
+  readonly teamId: TeamId
+  readonly members: ReadonlyArray<{ readonly identity: string; readonly role: 'human' | 'centaur' }>
+}
+```
+
+`GameConfig` is re-exported from Module 01 (Section 3.3). `TeamId` is re-exported from Module 01 (Section 3.1).
+
+**DOWNSTREAM IMPACT**: [04] must implement the `initialize_game` reducer to accept these inputs. [05] must implement the provisioning orchestration that supplies them. [03] must define the `hmacSecret` generation and the admission ticket format that SpacetimeDB validates.
+
+### 3.5 Shared Engine Codebase Contract
+
+Motivated by 02-REQ-034, 02-REQ-035, 02-REQ-036, 02-REQ-037.
+
+The shared engine codebase re-exports all of Module 01's exported interfaces (Section 3 of `01-game-rules.md`). The authoritative list of exports:
+
+```typescript
+export {
+  // Enums and branded types (01 §3.1)
+  Direction, CellType, ItemType, BoardSize, EffectFamily, EffectState,
+  Cell, SnakeId, TeamId, ItemId, TurnNumber, CentaurId, OperatorId, Agent,
+  BOARD_DIMENSIONS, invulnerabilityLevel, isVisible,
+
+  // State shapes (01 §3.2)
+  PotionEffect, SnakeState, ItemState, Board, TeamClockState,
+
+  // Game configuration (01 §3.3)
+  GameConfig,
+
+  // Game outcome (01 §3.4)
+  GameOutcome,
+
+  // Turn event schema (01 §3.5)
+  TurnEvent, DeathCause,
+
+  // Board generation failure (01 §3.6)
+  BoardGenerationFailure,
+
+  // Randomness primitives (01 §3.7)
+  Rng, rngFromSeed, subSeed,
+
+  // Entry points (01 §3.8)
+  StagedMove, generateBoardAndInitialState, resolveTurn,
+}
+```
+
+**Consumer contract**:
+
+| Consumer | Module | What it imports | Authority level |
+|----------|--------|-----------------|-----------------|
+| SpacetimeDB game module | [04] | Full export set; `resolveTurn()` + `generateBoardAndInitialState()` for authoritative execution | Authoritative |
+| Centaur Server library | [07], [08] | Full export set; `resolveTurn()` for simulation | Simulation only |
+| Game Platform web app | [09] | Domain types for rendering; `resolveTurn()` for pre-validation | Display only |
+| Operator web app | [08] | Domain types for rendering; `resolveTurn()` for pre-validation | Display only |
+
+**DOWNSTREAM IMPACT**: The shared engine codebase must use only ECMAScript standard library APIs (no runtime-specific APIs) because it runs in SpacetimeDB's TypeScript runtime, Node.js/Deno/Bun (Centaur Servers), and browsers. The BLAKE3 dependency for `subSeed()` (per Module 01 DOWNSTREAM IMPACT note 4) must be available in all three environments.
+
+### 3.6 Centaur Server Extension Surface
+
+Motivated by 02-REQ-030, 02-REQ-032.
+
+```typescript
+export interface CentaurServerExtensionSurface {
+  readonly drives: 'custom Drive<T> implementations per [07] interface'
+  readonly preferences: 'custom Preference implementations per [07] interface'
+  readonly operatorApp: 'optional UI customization per [08] interface'
+}
+```
+
+The extension surface is intentionally described by reference to downstream module interfaces rather than defining concrete types here, because the `Drive<T>` and `Preference` type signatures are owned by [07] and the operator app customization interface is owned by [08]. Module 02 exports only the *architectural fact* that exactly these three extension points exist and no others.
+
+**DOWNSTREAM IMPACT**: [07] must export `Drive<T>` and `Preference` type signatures that teams program against. [08] must export an operator app customization interface. No additional extension points may be added without revising 02-REQ-032.
+
+### 3.7 Security Enforcement Points
+
+Motivated by 02-REQ-033.
+
+Exported as architectural constraints specifying where each security invariant is enforced:
+
+```typescript
+export interface SecurityEnforcementModel {
+  readonly moveStagingAuthorization: {
+    readonly enforcedBy: 'SpacetimeDB stage_move reducer'
+    readonly scope: 'team-level (any team member can stage for any team snake)'
+    readonly mechanism: 'team_permissions table lookup against connection Identity'
+  }
+  readonly invisibilityFiltering: {
+    readonly enforcedBy: 'SpacetimeDB RLS'
+    readonly mechanism: 'Row filter on snake visibility flag × connection team membership'
+  }
+  readonly admissionTicketValidation: {
+    readonly enforcedBy: 'SpacetimeDB register reducer'
+    readonly mechanism: 'HMAC signature verification (secret seeded at instance init)'
+  }
+  readonly selectionInvariants: {
+    readonly enforcedBy: 'Convex function contracts'
+    readonly scope: 'at-most-one-operator-per-snake, at-most-one-snake-per-operator'
+  }
+  readonly centaurServerIdentity: {
+    readonly enforcedBy: 'Convex challenge-callback protocol'
+    readonly mechanism: 'Domain ownership verification via nonce echo'
+  }
+}
+```
+
+**DOWNSTREAM IMPACT**: [03] must implement admission ticket issuance and the challenge-callback protocol such that the HMAC secret is never exposed to clients. [04] must implement `stage_move` authorization and RLS filtering. [05]/[06] must implement selection invariant enforcement in Convex function contracts. None of these invariants may depend on the Centaur Server library being used — they must hold against any client that speaks the raw protocol.
+
+### 3.8 Client Connection Topology
+
+Motivated by 02-REQ-038, 02-REQ-039, 02-REQ-041.
+
+```typescript
+export interface OperatorConnectionModel {
+  readonly spacetimeDb: {
+    readonly transport: 'WebSocket'
+    readonly authMechanism: 'HMAC admission ticket via register reducer'
+    readonly capabilities: readonly ['subscribe_game_state', 'stage_move', 'declare_turn_over']
+  }
+  readonly convex: {
+    readonly transport: 'Convex client (HTTP/WebSocket)'
+    readonly authMechanism: 'Google OAuth session'
+    readonly capabilities: readonly ['subscribe_centaur_state', 'mutate_selection', 'mutate_drives', 'append_action_log']
+  }
+}
+
+export interface SpectatorConnectionModel {
+  readonly spacetimeDb: {
+    readonly transport: 'WebSocket'
+    readonly authMechanism: 'Read-only HMAC admission ticket via register reducer'
+    readonly capabilities: readonly ['subscribe_game_state']
+  }
+  readonly convex: null
+}
+
+export interface CentaurServerConnectionModel {
+  readonly spacetimeDb: {
+    readonly transport: 'WebSocket'
+    readonly authMechanism: 'HMAC admission ticket via register reducer (role: centaur)'
+    readonly capabilities: readonly ['subscribe_game_state', 'stage_move', 'declare_turn_over']
+  }
+  readonly convex: {
+    readonly transport: 'Convex client'
+    readonly authMechanism: 'Challenge-callback JWT'
+    readonly capabilities: readonly ['subscribe_centaur_state', 'mutate_snake_config', 'append_action_log']
+  }
+}
+```
+
+**DOWNSTREAM IMPACT**: [03] must issue distinct admission ticket types for operators (role: `human`), Centaur Servers (role: `centaur`), and spectators (role: `spectator`, read-only). [04] must enforce capability restrictions based on the ticket's role — spectators cannot call `stage_move` or `declare_turn_over`. [09] must implement the spectator connection flow. [08] must implement the operator dual-connection flow.
+
+### 3.9 Web Application Boundary
+
+Motivated by 02-REQ-042, 02-REQ-043, 02-REQ-044, 02-REQ-045 through 02-REQ-049.
+
+```typescript
+export interface WebApplicationBoundary {
+  readonly gamePlatform: {
+    readonly scope: readonly [
+      'home_navigation', 'team_identity_management', 'centaur_server_registration',
+      'member_management', 'timekeeper_assignment', 'room_browsing', 'room_creation',
+      'room_lobby', 'game_configuration', 'live_spectating', 'platform_replay_viewer',
+      'player_profiles', 'team_profiles', 'leaderboards'
+    ]
+    readonly excludes: readonly [
+      'bot_parameters', 'heuristic_configuration', 'drive_management',
+      'live_operator_interface', 'team_replay_viewer'
+    ]
+  }
+  readonly centaurServerApp: {
+    readonly scope: readonly [
+      'heuristic_configuration', 'bot_parameter_configuration',
+      'live_operator_interface', 'team_replay_viewer'
+    ]
+    readonly excludes: readonly [
+      'room_creation', 'room_browsing', 'leaderboards', 'platform_profiles'
+    ]
+  }
+}
+```
+
+**DOWNSTREAM IMPACT**: [09] must not build UI for any item in `gamePlatform.excludes`. [08] must not build UI for any item in `centaurServerApp.excludes`. The `centaur_server_registration` feature on the Game Platform is limited to registering the domain URL and triggering healthchecks — no bot or heuristic configuration.
+
+### 3.10 DOWNSTREAM IMPACT Notes
+
+1. **Single Convex namespace.** Modules [05] and [06] both define Convex tables within the same single deployment (02-REQ-002). They must coordinate to avoid naming collisions. Per SPEC-INSTRUCTIONS.md §Cross-Cutting Concerns, [05] should load [06]'s exported interfaces when authoring its schema.
+
+2. **SpacetimeDB instance isolation is a hard invariant.** Module [04] must design its authentication and subscription system such that no connection can access data from a different game's SpacetimeDB instance (02-REQ-004). This precludes any shared-state patterns across instances.
+
+3. **Config freeze at launch is irreversible.** Module [05]'s game configuration mutations must enforce that no configuration write succeeds when `GameStatus === 'playing'` or `GameStatus === 'finished'` (02-REQ-050). The frozen config supplied to `initialize_game` is the sole source of truth for the game's rules.
+
+4. **Successor auto-creation produces an unstarted game record only.** Module [05]'s game-end handler must create the successor record with `status: 'not-started'` and must NOT provision a SpacetimeDB instance as part of successor creation (02-REQ-051). Provisioning occurs only on subsequent explicit launch.
+
+5. **Selection state lives in Convex, not SpacetimeDB.** Module [04] must not include operator-to-snake mapping in its schema. Module [06] owns the selection tables and invariant enforcement. SpacetimeDB authorization is team-scoped only (02-REQ-017).
+
+6. **Shared engine codebase must be ECMAScript-portable.** The codebase consumed by [04] (SpacetimeDB), [07]/[08] (Centaur Server), and [09] (browser) must not use runtime-specific APIs. The BLAKE3 dependency must be available in all three environments. Flat board encoding (`y * width + x`) is mandated by Module 01 DOWNSTREAM IMPACT note 3.
+
+7. **WebSocket is the transport between clients and SpacetimeDB.** Modules [04], [08], and [09] must design their client connection code around WebSocket. HTTP fallback or alternative transports are not supported by SpacetimeDB's client protocol.
+
+8. **Game-end notification is runtime-pushed, not Convex-polled.** Module [04] must implement a mechanism to push game-end notifications to Convex (02-REQ-022a). Convex does not poll or subscribe to SpacetimeDB during gameplay. Module [05] must implement a handler for receiving this notification.
+
+9. **Security invariants are enforced at infrastructure boundaries, not in the library.** Modules [03], [04], [05], and [06] must implement their respective security enforcement points (Section 3.7) independently of the Centaur Server library. No security guarantee may assume the library is being used (02-REQ-033).
