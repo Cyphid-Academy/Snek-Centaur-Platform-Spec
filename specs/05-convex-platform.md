@@ -4,7 +4,7 @@
 
 ### 5.1 Scope and Schema Partitioning
 
-**05-REQ-001**: This module shall own the platform-wide portion of the single Convex deployment required by [02-REQ-002]. Platform-wide state comprises user accounts, API keys, registered Centaur Teams and their members, registered Centaur Servers, rooms, games, per-game team snapshots, persisted replays, and webhook subscriptions. Centaur-subsystem state (per-team Drive configuration, per-team heuristic configuration, bot parameters, per-snake live state, sub-turn action log) is owned by [06] and is outside the scope of this module.
+**05-REQ-001**: This module shall own the platform-wide portion of the single Convex deployment required by [02-REQ-002]. Platform-wide state comprises user accounts, API keys, Centaur Teams and their members, rooms, games, per-game team snapshots, persisted replays, and webhook subscriptions. Centaur-subsystem state (per-team Drive configuration, per-team heuristic configuration, bot parameters, per-snake live state, sub-turn action log) is owned by [06] and is outside the scope of this module.
 
 **05-REQ-002** *(negative)*: The Convex platform runtime shall not store any state whose authoritative home is the SpacetimeDB game runtime, except for the complete post-game replay record imported under [05-REQ-040]. In particular, while a game is in progress Convex shall not hold a mirror of the SpacetimeDB turn log, staged moves, per-turn snake states, or any other transient game-runtime state.
 
@@ -18,31 +18,29 @@
 
 **05-REQ-005**: A user record shall be created at the moment a Google OAuth authentication yields an email address for which no user record exists. A user record shall never be mutated such that its canonical email address changes; an email change at Google produces a distinct user record per [03-REQ-008].
 
-**05-REQ-006**: The user record shall be the anchor against which all Convex-side human-identity authorization, team membership ([05-REQ-011]), API key ownership ([05-REQ-046]), and historical action attribution is resolved.
+**05-REQ-006**: The user record shall be the anchor against which all Convex-side human-identity authorization, Centaur Team membership ([05-REQ-011]), API key ownership ([05-REQ-046]), admin role ([05-REQ-065]), and historical action attribution is resolved.
 
 **05-REQ-007** *(negative)*: Convex shall not delete user records in response to loss of access to a Google account, nor shall it merge two user records with distinct canonical email addresses. Historical attribution remains anchored to the original email per [03-REQ-047].
 
 ---
 
-### 5.3 Centaur Teams, Members, and Registered Servers
+### 5.3 Centaur Teams and Members
 
-**05-REQ-008**: Convex shall maintain a persistent record of every Centaur Team. Each team record shall capture at minimum a team name, a display colour, the user record of the current Captain, and a reference to the team's registered Centaur Server if one exists.
+**05-REQ-008**: Convex shall maintain a persistent record of every Centaur Team. Each Centaur Team record shall capture at minimum a team name, a display colour, the user record of the current Captain, and a nullable `nominatedServerDomain` string field identifying the domain of the Snek Centaur Server the team has nominated for game participation.
 
-**05-REQ-009**: Convex shall maintain a persistent record of every registered Centaur Server. Each Centaur Server record shall capture at minimum the domain at which the server is reachable (per [03-REQ-003]), a one-to-one binding to the Centaur Team that registered it (per [02-REQ-005] and [03-REQ-003]), the timestamp of the most recent successful challenge-callback against that domain, and a health status derived from healthcheck responses (per [02-REQ-029]).
+**05-REQ-009**: Convex shall record the latest healthcheck status and timestamp for each Centaur Team's nominated server domain ([02-REQ-029]). The healthcheck status shall be queryable by team members and by any authenticated user viewing the team's profile. The healthcheck may be triggered on demand by team members or by the Room Lobby view. Convex shall not be required to poll server health automatically; on-demand and game-start-time checks are sufficient.
 
-**05-REQ-010**: The one-to-one binding between a Centaur Team and its registered Centaur Server shall be enforced by Convex: no team shall have more than one registered server, and no server registration shall be shared across teams.
-
-**05-REQ-011**: Convex shall maintain a persistent record of Centaur Team membership associating each human member with the team and with a role. The closed set of roles shall be: Captain, Timekeeper, and Operator. At any given moment a team shall have exactly one Captain and at most one Timekeeper.
+**05-REQ-011**: Convex shall maintain a persistent record of Centaur Team membership associating each human member with the Centaur Team and with a role. The closed set of roles shall be: Captain, Timekeeper, and Operator. At any given moment a Centaur Team shall have exactly one Captain and at most one Timekeeper.
 
 **05-REQ-012**: Convex shall permit the Captain of a Centaur Team to add and remove human members from the team, to assign or unassign the Timekeeper role to any current team member, and to transfer the Captain role to another current team member. These mutations shall be subject to the mid-game freeze of [03-REQ-046].
 
-**05-REQ-013** *(negative)*: Convex shall reject any mutation to a Centaur Team's membership, Centaur Server registration, or Captain assignment while that team is participating in a game whose status is `playing`, consistent with [03-REQ-046].
+**05-REQ-013** *(negative)*: Convex shall reject any mutation to a Centaur Team's membership or Captain assignment while that team is participating in a game whose status is `playing`, consistent with [03-REQ-046].
 
-**05-REQ-014**: Convex shall permit the Captain of a Centaur Team to register or update the team's Centaur Server domain. Domain registration shall initiate the challenge-callback protocol of [03-REQ-013]; the server record shall not be marked registered until a successful challenge-callback completes. Domain updates shall invalidate prior Centaur Server credentials per [03-REQ-018].
+**05-REQ-014**: Convex shall permit the Captain of a Centaur Team to set or update the team's `nominatedServerDomain`. Setting the domain is a simple string field update — no challenge-callback or domain verification is required at nomination time. Domain validity is verified implicitly at game start when Convex POSTs a game invitation to the domain (see [05-REQ-032b]). The `nominatedServerDomain` shall not be changed while the team is participating in a game whose status is `playing`.
 
-**05-REQ-015**: Convex shall permit the platform to revoke a registered Centaur Server per [03-REQ-042]. Revocation shall unlink the server from its Centaur Team such that the team has no registered server until a fresh registration completes.
+**05-REQ-015**: Convex shall permit the Captain to clear a Centaur Team's `nominatedServerDomain`, setting it to null. A team with a null `nominatedServerDomain` cannot participate in a game.
 
-**05-REQ-015a**: Convex shall permit the deletion of a Centaur Team only when the team has no game in the `playing` status. Deletion of a Centaur Team shall cascade to all team-scoped records owned by this module (team membership entries, registered Centaur Server record) and shall cascade to team-scoped Centaur state owned by [06] per [06-REQ-041]. Historical game records that reference the deleted team shall be preserved per [03-REQ-047]; the participating-teams snapshot of each such historical game ([05-REQ-029]) shall continue to resolve the team's historical identity for attribution purposes even after the live team record is deleted. See REVIEW 05-REVIEW-011.
+**05-REQ-015a**: Convex shall permit the deletion of a Centaur Team only when the team has no game in the `playing` status. Deletion of a Centaur Team shall cascade to all team-scoped records owned by this module (team membership entries) and shall cascade to team-scoped Centaur state owned by [06] per [06-REQ-041]. Historical game records that reference the deleted team shall be preserved per [03-REQ-047]; the participating-teams snapshot of each such historical game ([05-REQ-029]) shall continue to resolve the team's historical identity for attribution purposes even after the live team record is deleted.
 
 ---
 
@@ -73,8 +71,8 @@
 | Board size | Enum | Medium | Small \| Medium \| Large \| Giant | Domain enum owned by [01] |
 | Max turn time | Seconds | 10 | 1–300 | Per-turn clock cap |
 | First turn time | Seconds | 60 | — | Applies to turn 0 only |
-| Initial time budget | Seconds | 60 | ≥ 0 | Starting chess-timer budget per team |
-| Budget increment | Milliseconds | 500 | 100–5000 | Added to each team's budget each turn |
+| Initial time budget | Seconds | 60 | ≥ 0 | Starting chess-timer budget per Centaur Team |
+| Budget increment | Milliseconds | 500 | 100–5000 | Added to each Centaur Team's budget each turn |
 | Snakes per team | Integer | 3 | 1–10 | Number of snakes each Centaur Team fields |
 | Max turns | Integer (optional) | off | ≥ 1 when set | Off = last-team-standing only |
 | Max health | Integer | 100 | ≥ 1 | Starting and restored health |
@@ -93,12 +91,13 @@
 | Tournament rounds | Integer | 1 | ≥ 1 | Required when tournament mode on |
 | Tournament interlude | Seconds | 30 | ≥ 0 | Required when tournament mode on |
 | Scheduled start time | Datetime | now + 10 min | — | Required when tournament mode on |
+| Game privacy | Boolean | off | — | When on, replay within-turn actions are restricted per [05-REQ-067] |
 
 **05-REQ-024**: Convex shall associate a game-configuration parameter set with every room (as the room's defaults) and with every game (as the game's binding parameters). A game's parameter set shall be captured as an immutable snapshot at the moment the game is created; subsequent edits to the room's defaults shall not retroactively affect an already-created game.
 
 **05-REQ-025**: Parameters whose meaning is conditional on another parameter (for example, fertile density and fertile clustering depend on fertile ground being on) shall be validated in a manner consistent with those conditions. Convex shall not refuse to persist a dependent parameter's value merely because its gating parameter is currently off, but shall also not supply that dependent value to the SpacetimeDB game instance when its gating parameter is off.
 
-**05-REQ-026** *(negative)*: The game-configuration parameter set shall not include any parameter that configures bot behaviour, heuristic defaults, or Drive management. Such parameters are owned by [06] and by the Centaur Server web application per [02-REQ-045] through [02-REQ-047].
+**05-REQ-026** *(negative)*: The game-configuration parameter set shall not include any parameter that configures bot behaviour, heuristic defaults, or Drive management. Such parameters are owned by [06] and by the Snek Centaur Server web application per [02-REQ-045] through [02-REQ-047].
 
 ---
 
@@ -106,25 +105,29 @@
 
 **05-REQ-027**: Convex shall maintain a persistent record of every game. Each game record shall capture at minimum the game's room, the bound parameter snapshot ([05-REQ-024]), a status value from the closed set `{ not-started, playing, finished }`, a reference to its SpacetimeDB instance (per [05-REQ-032]), the final scores (populated at game end per [05-REQ-038]), and the timestamps at which the game entered the `playing` and `finished` states.
 
-**05-REQ-028**: Convex shall be the sole authority for every game's status value. Transitions shall be: `not-started → playing` (on successful provisioning and seeding per [05-REQ-032]), `playing → finished` (on receipt of the game's terminal state from the SpacetimeDB instance per [05-REQ-038]). No other transitions shall be permitted.
+**05-REQ-028**: Convex shall be the sole authority for every game's status value. Transitions shall be: `not-started → playing` (on successful provisioning, seeding, and invitation acceptance per [05-REQ-032] and [05-REQ-032b]), `playing → finished` (on receipt of the game's terminal state from the SpacetimeDB instance per [05-REQ-038]). No other transitions shall be permitted, except for the invitation-failure rollback described in [05-REQ-032c].
 
 **05-REQ-029**: Convex shall maintain, for every game, a persistent record of which Centaur Teams are participating in that game and, for each such team, a snapshot of the team's authorized human members and their roles at the moment the game was created. This snapshot shall be treated as append-only historical fact per [03-REQ-047] and shall be used by Convex to seed the SpacetimeDB instance's admission authorization state at initialization time ([03-REQ-039]).
 
-**05-REQ-030**: The game's participating-teams snapshot shall be used, in combination with the team records of [05-REQ-008], to determine which humans and which Centaur Servers are authorized to obtain admission tickets for the game, consistent with [03-REQ-024] and [03-REQ-025].
+**05-REQ-030**: The game's participating-teams snapshot shall be used, in combination with the Centaur Team records of [05-REQ-008], to determine which humans are authorized to obtain admission tickets for the game, consistent with [03-REQ-024].
 
-**05-REQ-031**: Convex shall permit the administrative actor for a room (per [05-REQ-017]) to initiate a game start when all participating teams have marked themselves ready and the room has at least two enrolled teams. Upon successful game start, Convex shall create the game record in the `not-started` status and proceed to provisioning per [05-REQ-032].
+**05-REQ-031**: Convex shall permit the administrative actor for a room (per [05-REQ-017]) to initiate a game start when all participating Centaur Teams have marked themselves ready and the room has at least two enrolled teams. Upon successful game start, Convex shall create the game record in the `not-started` status and proceed to provisioning per [05-REQ-032].
 
-**05-REQ-032**: On game start, Convex shall orchestrate the provisioning of a fresh SpacetimeDB game instance per [02-REQ-003] and [02-REQ-020], the deployment of the shared engine codebase ([02-REQ-035]) into that instance, and the invocation of the instance's privileged initialization reducer (owned by [04]) with all of the following: the game configuration snapshot ([05-REQ-024]), the participating-teams snapshot ([05-REQ-029]) sufficient to populate the instance's admission authorization state per [03-REQ-039], and the instance's unique admission-ticket validation secret ([03-REQ-022]). Successful completion of this sequence shall transition the game's status to `playing`.
+**05-REQ-032**: On game start, Convex shall orchestrate the provisioning of a fresh SpacetimeDB game instance per [02-REQ-003] and [02-REQ-020], the deployment of the shared engine codebase ([02-REQ-035]) into that instance, and the invocation of the instance's privileged initialization reducer (owned by [04]) with all of the following: the game configuration snapshot ([05-REQ-024]), the participating-teams snapshot ([05-REQ-029]) sufficient to populate the instance's admission authorization state per [03-REQ-039], and the instance's unique admission-ticket validation secret ([03-REQ-022]).
 
 **05-REQ-032a**: Convex's interactions with the SpacetimeDB hosting platform and with a provisioned instance during the orchestration of [05-REQ-032] shall be authenticated per [03-REQ-048]. As part of the same orchestration, Convex shall register itself as a subscriber to the provisioned instance's game-end notification mechanism ([04-REQ-061a]) no later than the successful completion of that orchestration. This subscription is the mechanism by which Convex later learns of the game's terminal state per [05-REQ-038].
+
+**05-REQ-032b**: After successful SpacetimeDB provisioning and before transitioning the game to `playing`, Convex shall execute the **game invitation sequence**: for each participating Centaur Team, Convex shall generate a **per-Centaur-Team game credential** (scoped to that team and that game) and POST a game invitation to `{team.nominatedServerDomain}/.well-known/snek-game-invite`. The invitation payload shall include at minimum: the game ID, the Centaur Team ID, and the per-Centaur-Team game credential. The per-Centaur-Team game credential shall grant the receiving Snek Centaur Server: (a) Convex write access scoped to that Centaur Team's centaur state for that game, and (b) the ability to obtain SpacetimeDB admission tickets for that Centaur Team's bot participant.
+
+**05-REQ-032c**: Each Snek Centaur Server must respond to the game invitation with an acceptance. If any server rejects the invitation or fails to respond within a timeout, the game start shall fail: the game shall return to `not-started` status with an error indicating which server(s) declined or timed out, and the provisioned SpacetimeDB instance shall be torn down. Multiple Centaur Teams may have the same `nominatedServerDomain`; the server receives one invitation per team it hosts.
 
 **05-REQ-033** *(negative)*: Convex shall not provision a SpacetimeDB game instance before a game record has been created for it, and shall not create a game record without intending to provision an instance for it. Unorphaned instance-less game records and game-less instances are both disallowed states.
 
 **05-REQ-034**: Convex shall provision a fresh admission-ticket validation secret per SpacetimeDB instance at initialization time ([03-REQ-022]). This secret shall be retained by Convex for the duration of the game so that Convex can sign admission tickets for the instance under [03-REQ-019] and [03-REQ-021]. Convex shall not retain the secret after the instance has been torn down and the replay has been persisted.
 
-**05-REQ-035**: The Convex runtime shall be the sole issuer of admission tickets for every SpacetimeDB game instance it provisions, consistent with [03-REQ-019], [03-REQ-024], [03-REQ-025], and [03-REQ-026]. The Convex runtime shall refuse to issue an admission ticket whose target game is in the `finished` status.
+**05-REQ-035**: The Convex runtime shall be the sole issuer of admission tickets for every SpacetimeDB game instance it provisions, consistent with [03-REQ-019], [03-REQ-024], and [03-REQ-026]. The Convex runtime shall refuse to issue an admission ticket whose target game is in the `finished` status.
 
-**05-REQ-036**: When a healthcheck call to a participating team's Centaur Server ([02-REQ-029]) returns unhealthy at a moment Convex is preparing to transition a game to `playing`, Convex shall not transition the game to `playing`. The specific recovery action (retry, abort, surface error to operator) is unspecified at the requirements level and shall be determined in Design.
+**05-REQ-036**: When a Snek Centaur Server hosting a participating Centaur Team's `nominatedServerDomain` returns unhealthy from the healthcheck endpoint ([02-REQ-029]) at a moment Convex is preparing to transition a game to `playing`, Convex shall not transition the game to `playing`. The specific recovery action (retry, abort, surface error to operator) is unspecified at the requirements level and shall be determined in Design.
 
 **05-REQ-037**: After a game's status has transitioned to `finished` and its replay has been persisted per [05-REQ-040], Convex shall orchestrate teardown of the SpacetimeDB game instance per [02-REQ-021]. Teardown shall complete before any SpacetimeDB resources associated with the instance are released by the platform.
 
@@ -138,13 +141,13 @@
 
 **05-REQ-040**: Before tearing down a SpacetimeDB game instance per [05-REQ-037], Convex shall obtain the complete append-only game record from the instance — comprising all static tables and all turn-keyed tables sufficient to reconstruct any historical turn of the game per [02-REQ-013] — and shall persist this record as a replay associated with the game record. Retrieval may follow any pattern permitted by [04-REQ-061] (Convex-pull via HTTP action, runtime-push to a Convex endpoint, or bundling into the game-end notification of [04-REQ-061a]); in all cases, Convex's access to the instance for retrieval is authenticated per [03-REQ-048].
 
-**05-REQ-041**: The persisted replay shall be sufficient, in combination with the Centaur subsystem action log owned by [06], to reconstruct the complete turn-level history of the game for the platform replay viewer ([09], informal spec §13.2) and the sub-turn team replay viewer ([08], informal spec §13.3).
+**05-REQ-041**: The persisted replay shall be sufficient, in combination with the Centaur subsystem action log owned by [06], to reconstruct the complete turn-level history of the game for the unified replay viewer ([08]).
 
 **05-REQ-042**: While persisting a replay, Convex shall resolve every `stagedBy` attribution in the game record to its Convex-interpretable form per [03-REQ-045]. The persisted replay shall not contain any raw SpacetimeDB connection Identity in a `stagedBy` field.
 
 **05-REQ-043** *(negative)*: Convex shall not begin replay persistence until the game's status has reached the moment at which the SpacetimeDB instance's authoritative game record is final — that is, not before the SpacetimeDB-side terminal state has been signalled per [05-REQ-038].
 
-**05-REQ-044**: A persisted replay shall survive any subsequent teardown of the SpacetimeDB instance. Platform replay viewing and team replay viewing shall never require consulting a SpacetimeDB instance.
+**05-REQ-044**: A persisted replay shall survive any subsequent teardown of the SpacetimeDB instance. Replay viewing shall never require consulting a SpacetimeDB instance.
 
 ---
 
@@ -154,20 +157,20 @@
 
 **05-REQ-046**: Convex shall maintain a persistent record of every API key. Each record shall capture at minimum a one-way-hash of the key material (per [03-REQ-034]), a human-chosen label, the user record of the creating human ([03-REQ-035]), the creation timestamp, and a revocation timestamp that is null until the key is revoked. Convex shall never store or expose the plaintext key material after the single creation-time disclosure of [03-REQ-034].
 
-**05-REQ-047**: The HTTP API's authorization scope for a given API key shall be bounded by the authorization scope of the human who created the key, per [03-REQ-035]. If the creating human's team memberships or role assignments change such that their current authorization scope shrinks, the API key's scope shall shrink correspondingly. Convex shall not grant an API key any authorization its creator cannot currently exercise through the Game Platform UI.
+**05-REQ-047**: The HTTP API's authorization scope for a given API key shall be bounded by the authorization scope of the human who created the key, per [03-REQ-035]. If the creating human's team memberships or role assignments change such that their current authorization scope shrinks, the API key's scope shall shrink correspondingly. Convex shall not grant an API key any authorization its creator cannot currently exercise through the Snek Centaur Server frontend.
 
-**05-REQ-048** *(negative)*: The HTTP API shall not expose endpoints that create human or Centaur Server identities, that perform Google OAuth interactions, that issue admission tickets directly, or that modify Centaur-subsystem state owned by [06]. These affordances are prohibited for API keys by [03-REQ-036] and are not exposed to human users via the Game Platform either.
+**05-REQ-048** *(negative)*: The HTTP API shall not expose endpoints that create human identities, that perform Google OAuth interactions, that issue admission tickets directly, or that modify Centaur-subsystem state owned by [06]. These affordances are prohibited for API keys by [03-REQ-036].
 
 **05-REQ-049**: The HTTP API shall expose at minimum the following endpoint families. Exact URL shapes and payload schemas are owned by Design; requirements here enumerate the capabilities that must be present.
 
-- **Centaur Teams**: list teams; read a team including name, colour, Captain, members, and registered server domain; create a team; update team name, colour, or server domain; add or remove a team member.
+- **Centaur Teams**: list teams; read a team including name, colour, Captain, members, and `nominatedServerDomain`; create a team; update team name, colour, or `nominatedServerDomain`; add or remove a team member.
 - **Rooms**: list rooms including id, name, creation and update timestamps, and owner; read a room including its current game id and the ids of its historic games; create a room; update a room's configuration; add or remove a Centaur Team from a room's enrollment.
 - **Games**: read a game's state including configuration snapshot, status, and final scores (null until `finished`); start a game in a room (triggering the orchestration of [05-REQ-032]).
 - **Webhooks**: register a webhook; list registered webhooks; delete a webhook.
 
-**05-REQ-050**: Every mutation made through the HTTP API shall be subject to the same invariants as the equivalent Game Platform UI action, including the mid-game roster freeze of [03-REQ-046].
+**05-REQ-050**: Every mutation made through the HTTP API shall be subject to the same invariants as the equivalent Snek Centaur Server frontend action, including the mid-game roster freeze of [03-REQ-046].
 
-**05-REQ-051**: The HTTP API shall expose a means by which an authenticated human can create a new API key via the Game Platform UI or via a dedicated endpoint. The plaintext of a newly created API key shall be disclosed to the creator exactly once at creation time ([03-REQ-034]).
+**05-REQ-051**: The HTTP API shall expose a means by which an authenticated human can create a new API key via the Snek Centaur Server frontend or via a dedicated endpoint. The plaintext of a newly created API key shall be disclosed to the creator exactly once at creation time ([03-REQ-034]).
 
 **05-REQ-052**: The HTTP API shall expose a means by which an authenticated human can revoke an API key they created. Revocation shall cause all subsequent requests presenting that key to be rejected.
 
@@ -195,13 +198,37 @@
 
 **05-REQ-060**: Tournament rounds shall be chained such that round N+1 is scheduled to begin after round N has finished and after the Tournament interlude (in seconds, per [05-REQ-023]) has elapsed. Convex shall be the sole authority for scheduling and initiating each round.
 
-**05-REQ-061**: The first round of a tournament shall be scheduled to begin at the Scheduled start time parameter value. Convex shall not begin the first round before that moment regardless of team readiness.
+**05-REQ-061**: The first round of a tournament shall be scheduled to begin at the Scheduled start time parameter value. Convex shall not begin the first round before that moment regardless of Centaur Team readiness.
 
 **05-REQ-062**: Each round within a tournament shall inherit the configuration parameters of the enclosing tournament at the moment the round is created. The inherited parameter set shall not include the Tournament mode parameters themselves (Tournament rounds, Tournament interlude, Scheduled start time), which are meta-parameters of the tournament as a whole rather than per-round parameters.
 
 **05-REQ-063**: At the end of a tournament — the conclusion of the final round — Convex shall not auto-create an additional game per [05-REQ-039]. Auto-creation of next-games applies only outside tournament mode.
 
-**05-REQ-064**: The mid-game roster freeze of [03-REQ-046] shall apply per-round within a tournament: during each `playing` round, rosters of participating teams are frozen; between rounds, rosters are not frozen at the Module [03] level. See REVIEW 05-REVIEW-003.
+**05-REQ-064**: The mid-game roster freeze of [03-REQ-046] shall apply per-round within a tournament: during each `playing` round, rosters of participating Centaur Teams are frozen; between rounds, rosters are not frozen at the Module [03] level. See REVIEW 05-REVIEW-003.
+
+---
+
+### 5.11 Admin Role
+
+**05-REQ-065**: The platform shall recognize an **admin** role at the Convex level, distinct from all Centaur Team roles (Captain, Timekeeper, Operator). Admin is a platform-wide role on the user record, not a per-team role.
+
+**05-REQ-066**: Admin users shall be able to read all Centaur Team records, browse all games across all Centaur Teams, and view all replays regardless of team membership.
+
+**05-REQ-067**: Admin users shall be able to view any replay's full within-turn action log for all participating Centaur Teams, regardless of the game's privacy setting ([05-REQ-023] game privacy flag).
+
+**05-REQ-068**: How admin accounts are designated (e.g., a list of admin emails in Convex environment config, a database flag on user records) is a design-phase decision. Requirements state only the capability, not the mechanism.
+
+---
+
+### 5.12 Replay Access and Game Privacy
+
+**05-REQ-069**: Each game record shall carry a **game privacy flag** (default: not private), set via the game configuration parameter "Game privacy" ([05-REQ-023]).
+
+**05-REQ-070**: For non-private games: any authenticated user may view the full replay including all Centaur Teams' within-turn actions (action log entries, stateMap snapshots, worst-case worlds, heuristic outputs).
+
+**05-REQ-071**: For private games: the replay viewer shall show within-turn events only for Centaur Teams the viewing user belonged to during that game (resolved from the game's participating-teams snapshot [05-REQ-029]). Board-level turn replay (board state, moves, outcomes, turn events) remains visible to all authenticated users.
+
+**05-REQ-072**: Admin users bypass game privacy restrictions entirely per [05-REQ-067].
 
 ---
 
@@ -297,7 +324,7 @@
 **Type**: Gap
 **Phase**: Requirements
 **Context**: 05-REQ-031 mentions "marked themselves ready" but does not specify where team readiness is stored, how it is cleared, or which actor within a team can mark ready. Informal spec §9.4 step 3 says "Each Centaur Team's Captain (or any operator) marks their team ready." This is a platform-side state that lives somewhere, and since it governs the game-start gate, it is squarely in Module 05's territory — but the requirement is currently vague.
-**Question**: Where does team readiness live (room record? team record? ephemeral in-memory? transient game record?) and what clears it?
+**Question**: Where does Centaur Team readiness live (room record? team record? ephemeral in-memory? transient game record?) and what clears it?
 **Options**:
 - A: Readiness is a per-(room, team) flag on the room record, cleared automatically whenever the room's configuration changes and whenever a new game is auto-created.
 - B: Readiness is a field on the game record from game creation onward, and the not-started game is created eagerly to hold it.
@@ -324,13 +351,23 @@
 
 **Type**: Gap
 **Phase**: Requirements
-**Context**: 05-REQ-036 asserts that if a participating team's Centaur Server is unhealthy at game-start time, Convex does not transition the game to `playing`, but leaves the specific recovery action to Design. This is an under-specified requirement because it affords multiple mutually incompatible interpretations (retry indefinitely, abort the game, surface to operator, substitute a stub). Requirements-level clarity on the intended behaviour would improve testability.
+**Context**: 05-REQ-036 asserts that if a participating Centaur Team's Snek Centaur Server is unhealthy at game-start time, Convex does not transition the game to `playing`, but leaves the specific recovery action to Design. This is an under-specified requirement because it affords multiple mutually incompatible interpretations (retry indefinitely, abort the game, surface to operator, substitute a stub). Requirements-level clarity on the intended behaviour would improve testability.
 **Question**: What is the intended recovery action?
 **Options**:
 - A: Abort the game-start attempt and surface the error to the initiating actor; no retry.
 - B: Retry with bounded backoff, then abort on exhaustion.
 - C: Surface to the operator and wait indefinitely until either the server becomes healthy or the operator aborts.
-**Informal spec reference**: §2 ("Centaur Servers"); §9.4.
+**Informal spec reference**: §2 ("Snek Centaur Servers"); §9.4.
+
+---
+
+### 05-REVIEW-010: Transitive dependency on Module 01 exported interfaces
+
+**Type**: Gap
+**Phase**: Requirements
+**Context**: Several requirements in this module reference domain concepts owned by [01] — board size enum, "turn", snake count, win conditions, scores — via transitive dependency through [02]. Per Context Management Rule 2, during Phase 1 the agent loads full direct dependencies and Exported Interfaces of transitive dependencies. [01] has only Phase 1 drafted, so no Exported Interfaces exist yet. The current draft references [01] requirement IDs and domain concepts informally. When [01] reaches Phase 2, its exported type vocabulary may not line up exactly with the informal references used here, necessitating a reconciliation pass.
+**Question**: None — this is a meta-flag for the human to revisit after [01] Phase 2 completes.
+**Informal spec reference**: N/A (meta).
 
 ---
 
@@ -348,10 +385,28 @@
 
 ---
 
-### 05-REVIEW-010: Transitive dependency on Module 01 exported interfaces
+### 05-REVIEW-012: Per-Centaur-Team game credential scope and lifetime
 
 **Type**: Gap
 **Phase**: Requirements
-**Context**: Several requirements in this module reference domain concepts owned by [01] — board size enum, "turn", snake count, win conditions, scores — via transitive dependency through [02]. Per Context Management Rule 2, during Phase 1 the agent loads full direct dependencies and Exported Interfaces of transitive dependencies. [01] has only Phase 1 drafted, so no Exported Interfaces exist yet. The current draft references [01] requirement IDs and domain concepts informally. When [01] reaches Phase 2, its exported type vocabulary may not line up exactly with the informal references used here, necessitating a reconciliation pass.
-**Question**: None — this is a meta-flag for the human to revisit after [01] Phase 2 completes.
-**Informal spec reference**: N/A (meta).
+**Context**: 05-REQ-032b introduces per-Centaur-Team game credentials that are pushed to Snek Centaur Servers at game start. The credential's lifetime and revocation mechanics are not yet specified. Questions include: (a) does the credential expire at game end, or does Convex explicitly revoke it? (b) can a credential be refreshed mid-game? (c) what is the credential format (JWT, opaque token, etc.)?
+**Question**: What are the lifetime and revocation semantics for per-Centaur-Team game credentials?
+**Options**:
+- A: Credential is valid for the duration of the game and expires automatically when the game transitions to `finished`. No mid-game refresh. Format is a Design concern.
+- B: Credential has a short TTL and the Snek Centaur Server must periodically refresh it from Convex during the game.
+- C: Credential is valid indefinitely but Convex revokes it at game end.
+**Informal spec reference**: N/A (new concept).
+
+---
+
+### 05-REVIEW-013: Game invitation timeout value
+
+**Type**: Gap
+**Phase**: Requirements
+**Context**: 05-REQ-032c specifies that servers must respond within a timeout, but does not specify the timeout value. Too short and legitimate servers may fail; too long and game start is delayed.
+**Question**: What is the appropriate timeout for game invitation acceptance?
+**Options**:
+- A: Fixed timeout specified in requirements (e.g., 10 seconds).
+- B: Configurable timeout as a platform-level setting, with a default specified in Design.
+- C: Leave to Design entirely.
+**Informal spec reference**: N/A (new concept).

@@ -4,31 +4,31 @@
 
 ### 6.1 Scope and Ownership
 
-**06-REQ-001**: The Centaur state subsystem shall be the persistent store of all per-team and per-game state that the bot framework ([07]) and the Centaur Server web application ([08]) require, other than authoritative game state (which lives in SpacetimeDB per [02-REQ-007]) and platform-wide records (which are owned by [05]).
+**06-REQ-001**: The Centaur state subsystem shall be the persistent store of all per-Centaur-Team and per-game state that the bot framework ([07]) and the Snek Centaur Server frontend ([08]) require, other than authoritative game state (which lives in SpacetimeDB per [02-REQ-007]) and platform-wide records (which are owned by [05]).
 
 **06-REQ-002**: All Centaur state shall reside in the single Convex deployment mandated by [02-REQ-002]. No Centaur state shall be stored in any SpacetimeDB instance.
 
 **06-REQ-003** *(negative)*: The Centaur state subsystem shall not hold any state that is authoritative for game outcome. Game-authoritative state (board, snake bodies, items, chess timer, turn history) is owned by SpacetimeDB per [02-REQ-013].
 
 **06-REQ-004**: Centaur state shall be partitioned into two lifetime classes:
-- **Team-scoped persistent state**: survives across games and is edited between games. Bound to a Centaur Team identity ([02-REQ-005], [03]).
+- **Team-scoped persistent state**: survives across games and is edited between games. Bound to a Centaur Team identity ([02-REQ-005]).
 - **Game-scoped state**: bound to a single game's lifetime, initialised at game start and retained thereafter for replay ([06-REQ-040]).
 
 ---
 
 ### 6.2 Team-Scoped Heuristic Defaults
 
-**06-REQ-005**: The subsystem shall persist, per Centaur Team, a **heuristic default configuration** describing the team's defaults for every Drive type and every Preference registered with that team's Centaur Server ([07]).
+**06-REQ-005**: The subsystem shall persist, per Centaur Team, a **heuristic default configuration** describing the team's defaults for every Drive type and every Preference registered with that Centaur Team's Snek Centaur Server ([07]).
 
 **06-REQ-006**: For each registered Preference, the heuristic default configuration shall store: (a) whether the Preference is active on new snakes by default, and (b) its default portfolio weight.
 
 **06-REQ-007**: For each registered Drive type, the heuristic default configuration shall store: (a) its default portfolio weight when added to a snake, and (b) its ordinal position in the Drive dropdown presented to operators ([08]).
 
-**06-REQ-008**: The subsystem shall accept authorised mutations that create, update, or delete entries in the heuristic default configuration. Writes shall be permitted only to members of the owning Centaur Team ([03]).
+**06-REQ-008**: The subsystem shall accept authorised mutations that create, update, or delete entries in the heuristic default configuration. Writes shall be permitted only to members of the owning Centaur Team.
 
 **06-REQ-009**: Edits to the heuristic default configuration shall not retroactively affect any game already in progress. Game-scoped per-snake portfolio state ([06-REQ-013]) is independent of the team's current defaults once the game has begun.
 
-**06-REQ-010** *(negative)*: The Game Platform shall not write to the heuristic default configuration. This is a restatement of [02-REQ-046] at the data layer and is enforced by function-contract checks in the subsystem, not by trust in the Game Platform.
+**06-REQ-010** *(negative)*: No runtime other than the owning Centaur Team's members shall write to the heuristic default configuration. This is a restatement of [02-REQ-046] at the data layer and is enforced by function-contract checks in the subsystem.
 
 ---
 
@@ -40,7 +40,7 @@
 - The automatic-mode time allocation applied to turns other than turn 0.
 - The automatic-mode time allocation applied to turn 0.
 
-**06-REQ-012** *(negative)*: The Game Platform shall not write to the bot parameter record. This is a restatement of [02-REQ-045] at the data layer and is enforced by function-contract checks in the subsystem.
+**06-REQ-012** *(negative)*: No runtime other than the owning Centaur Team's members shall write to the bot parameter record. This is a restatement of [02-REQ-045] at the data layer and is enforced by function-contract checks in the subsystem.
 
 ---
 
@@ -97,7 +97,7 @@ Initialisation shall use the team's heuristic default configuration as captured 
 - A per-direction representation of any annotations computed against those worst-case worlds (e.g., territory overlays) that the operator interface renders.
 - A per-direction representation of the normalised per-heuristic outputs that produced each score, sufficient to drive the decision breakdown table in [08].
 
-**06-REQ-027**: The Centaur Server for the owning team shall be the sole writer of a snake's computed display state. No other runtime or identity shall write to it. (Paired with the action log writer rules in [06-REQ-037].)
+**06-REQ-027**: The Snek Centaur Server hosting the owning Centaur Team shall be the sole writer of a snake's computed display state, authenticated via the per-Centaur-Team game credential ([05-REQ-032b]). No other runtime or identity shall write to it. (Paired with the action log writer rules in [06-REQ-037].)
 
 **06-REQ-028**: Updates to computed display state shall be full snapshots rather than deltas, so that any recorded snapshot is independently interpretable without reference to prior snapshots. (Supports sub-turn replay reconstruction per [06-REQ-035].)
 
@@ -112,10 +112,10 @@ Initialisation shall use the team's heuristic default configuration as captured 
 **06-REQ-031**: Every function in the contract surface that mutates Centaur state shall authenticate the caller and shall reject the mutation if the caller's identity does not have a right to perform it under the rules stated in [06-REQ-008], [06-REQ-010], [06-REQ-012], [06-REQ-024], and [06-REQ-025].
 
 **06-REQ-032**: The function contract surface shall expose read queries sufficient for:
-- The Centaur Server web application to render the live operator interface and the team-perspective replay viewer ([08]).
-- The bot framework on the Centaur Server to read the effective heuristic configuration for each of its team's snakes ([07]).
+- The Snek Centaur Server frontend to render the live operator interface and the replay viewer ([08]).
+- The bot framework on the Snek Centaur Server to read the effective heuristic configuration for each of its Centaur Team's snakes ([07]).
 
-Read access shall be scoped such that a member of one team cannot read another team's heuristic default configuration, bot parameters, per-snake portfolio state, selection state, computed display state, or action log, except where an explicit cross-team read affordance is defined (none are defined by this module).
+Read access shall be scoped such that a member of one Centaur Team cannot read another team's heuristic default configuration, bot parameters, per-snake portfolio state, selection state, computed display state, or action log, except where an explicit cross-team read affordance is defined. Admin users ([05-REQ-065]) may read all Centaur Teams' state for administrative and replay purposes per [05-REQ-066] and [05-REQ-067].
 
 ---
 
@@ -123,7 +123,7 @@ Read access shall be scoped such that a member of one team cannot read another t
 
 **06-REQ-033**: The subsystem shall persist a **Centaur action log** recording state-changing events in the Centaur subsystem during each game, at clock-time resolution finer than turn granularity.
 
-**06-REQ-034**: Each action log entry shall record at minimum: the game it belongs to, the turn in which it occurred, the identity of the actor (user identity or Centaur Server identity per [03]), the actor's identity type (human or Centaur Server), and a wall-clock timestamp.
+**06-REQ-034**: Each action log entry shall record at minimum: the game it belongs to, the turn in which it occurred, the identity of the actor (user identity or Snek Centaur Server acting via per-Centaur-Team game credential), the actor's identity type (human or bot), and a wall-clock timestamp.
 
 **06-REQ-035**: The action log shall be sufficient, in combination with the SpacetimeDB game log imported at game end ([02-REQ-022], [05]), to reconstruct the team's experience at any timestamp within any turn of the game, including:
 - Which snake each operator had selected at that moment.
@@ -145,11 +145,11 @@ Read access shall be scoped such that a member of one team cannot read another t
 - Computed display state snapshots (snake, stateMap, worst-case worlds, annotations, heuristic outputs), written as full snapshots per [06-REQ-028].
 - Temperature override changes (snake, new value).
 
-**06-REQ-037**: The following action log event categories shall be written exclusively by the owning team's Centaur Server runtime, since no other runtime has the information needed to produce them:
+**06-REQ-037**: The following action log event categories shall be written exclusively by the Snek Centaur Server hosting the owning Centaur Team (authenticated via the per-Centaur-Team game credential), since no other runtime has the information needed to produce them:
 - Computed display state snapshots.
 - Bot-originated move staging events.
 
-All other event categories may be written by either the Centaur Server or a human operator on the team, as appropriate to the origin of the action.
+All other event categories may be written by either the Snek Centaur Server or a human operator on the team, as appropriate to the origin of the action.
 
 **06-REQ-038** *(negative)*: The action log shall not be used to reconstruct authoritative game state (board contents, snake bodies, collisions, item spawns). Authoritative game state is reconstructed from the SpacetimeDB log per [02-REQ-013].
 
@@ -169,13 +169,13 @@ All other event categories may be written by either the Centaur Server or a huma
 
 ### 6.10 Interaction Boundaries
 
-**06-REQ-043**: A Centaur Server shall be able to subscribe to its team's team-scoped state and to its active games' game-scoped state such that changes are observed in real time by the bot framework and the served operator interface. (Discharges [02-REQ-024] at the data-contract level.)
+**06-REQ-043**: A Snek Centaur Server shall be able to subscribe to its hosted Centaur Teams' team-scoped state and to their active games' game-scoped state such that changes are observed in real time by the bot framework and the served operator interface. (Discharges [02-REQ-024] at the data-contract level.)
 
-**06-REQ-044**: Human operators shall be able to read and mutate Centaur state directly through the function contract surface without routing through their team's Centaur Server runtime, subject to the authorisation rules in [06-REQ-031]. (Discharges [02-REQ-039] at the data-contract level.)
+**06-REQ-044**: Human operators shall be able to read and mutate Centaur state directly through the function contract surface without routing through their Snek Centaur Server runtime, subject to the authorisation rules in [06-REQ-031]. (Discharges [02-REQ-039] at the data-contract level.)
 
-**06-REQ-045** *(negative)*: The SpacetimeDB game runtime shall not read from or write to Centaur state. All communication between a Centaur Server's bot framework and the game runtime flows through the staged-moves mechanism ([02-REQ-011]) and the real-time subscription ([02-REQ-023]), never through Convex.
+**06-REQ-045** *(negative)*: The SpacetimeDB game runtime shall not read from or write to Centaur state. All communication between the Snek Centaur Server's bot framework and the game runtime flows through the staged-moves mechanism ([02-REQ-011]) and the real-time subscription ([02-REQ-023]), never through Convex.
 
-**06-REQ-046** *(negative)*: The Centaur state subsystem shall not expose any mutation that lets a Centaur Server or human operator write directly to SpacetimeDB-owned state. Cross-runtime state flows only in the direction defined by [02]'s topology.
+**06-REQ-046** *(negative)*: The Centaur state subsystem shall not expose any mutation that lets a Snek Centaur Server or human operator write directly to SpacetimeDB-owned state. Cross-runtime state flows only in the direction defined by [02]'s topology.
 
 ---
 

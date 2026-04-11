@@ -4,13 +4,13 @@
 
 ### 7.1 Scope and Runtime Placement
 
-**07-REQ-001**: The bot framework shall be a library consumed by the Centaur Server runtime ([02-REQ-004]). It shall execute within the Centaur Server process and share that process's access to the team's Centaur state ([06]) and to the game's SpacetimeDB instance ([02-REQ-023]).
+**07-REQ-001**: The bot framework shall be a library consumed by the Snek Centaur Server runtime ([02-REQ-004]). It shall execute within the Snek Centaur Server process and share that process's access to its hosted Centaur Teams' Centaur state ([06]) and to each team's game's SpacetimeDB instance ([02-REQ-023]).
 
 **07-REQ-002**: The bot framework shall operate at single-ply (depth-1) lookahead for the MVP: for each candidate self-move, it simulates exactly the next turn's resolution and scores the resulting board. Multi-ply tree search is out of scope for this module. (Flagged: see 07-REVIEW-001.)
 
 **07-REQ-003**: The bot framework shall produce, for every snake owned by its team in the current game, a **stateMap** — a function from candidate direction to a worst-case weighted score — updated continuously during the turn in response to changes in its reactive inputs (07-REQ-020).
 
-**07-REQ-004**: The bot framework shall be the sole writer of the per-snake computed display state defined in [06-REQ-026], for the snakes owned by the Centaur Server's team. This discharges [06-REQ-027] from the bot-framework side.
+**07-REQ-004**: The bot framework shall be the sole writer of the per-snake computed display state defined in [06-REQ-026], for the snakes owned by a hosted Centaur Team. This discharges [06-REQ-027] from the bot-framework side.
 
 **07-REQ-005** *(negative)*: The bot framework shall not write authoritative game state to SpacetimeDB. Its only write channel into SpacetimeDB is the staged-move mechanism ([02-REQ-011]), for automatic-mode snakes per 07-REQ-046.
 
@@ -55,7 +55,7 @@
 
 **07-REQ-017**: A Drive's **target** shall be a concrete reference — a specific snake identity or a specific cell coordinate — at every moment the Drive is active on a snake. The framework shall not maintain Drives whose target is unresolved.
 
-**07-REQ-018** *(negative)*: The framework shall not modify the team's heuristic default configuration on its own initiative. All writes to [06]'s team-scoped state are operator-initiated via the Centaur Server web application ([08]).
+**07-REQ-018** *(negative)*: The framework shall not modify the team's heuristic default configuration on its own initiative. All writes to [06]'s team-scoped state are operator-initiated via the Snek Centaur Server frontend ([08]).
 
 ---
 
@@ -110,7 +110,7 @@
 
 **07-REQ-033**: "Foreign snake", as used in §7.5 and §7.6, means any snake other than the owned snake being scored — including alive teammates. The bot framework shall treat teammate snakes as foreign for the purpose of the lattice and commitment state. (Flagged: see 07-REVIEW-002.)
 
-**07-REQ-034**: For a teammate snake, commitment state is observable by the framework: it is the teammate's staged move (if any), read from the Centaur Server's own state — where "staged" is in the sense of either an operator-staged move recorded by [06]'s action log or a submission-pipeline staging recorded by 07-REQ-046. For an opposing team's snake, commitment state shall always be null (automatic from the framework's perspective), because no mechanism exists for the framework to observe another team's staging.
+**07-REQ-034**: For a teammate snake, commitment state is observable by the framework: it is the teammate's staged move (if any), read from the Snek Centaur Server's own state — where "staged" is in the sense of either an operator-staged move recorded by [06]'s action log or a submission-pipeline staging recorded by 07-REQ-046. For an opposing team's snake, commitment state shall always be null (automatic from the framework's perspective), because no mechanism exists for the framework to observe another team's staging.
 
 ---
 
@@ -156,13 +156,13 @@ Within each tier, compute shall be allocated round-robin across snakes.
 
 **07-REQ-046**: Manual-mode snakes — whether currently selected or not — shall never be staged by the scheduled or final submission passes. Their staged moves shall originate exclusively from operator action routed through [08]'s live operator interface. This discharges 07's share of the manual/auto staging split in [06-REQ-018].
 
-**07-REQ-047**: Each staged move produced by the framework shall be attributable to the Centaur Server identity ([03]), not to any individual human operator, so that turn-event emission ([01-REQ-052]) can distinguish bot-originated moves from operator-originated moves in the `stagedBy` field.
+**07-REQ-047**: Each staged move produced by the framework shall be attributable to the bot participant identity (via the per-Centaur-Team game credential issued by the game invitation flow of [05-REQ-032b]), not to any individual human operator, so that turn-event emission ([01-REQ-052]) can distinguish bot-originated moves from operator-originated moves in the `stagedBy` field.
 
 ---
 
 ### 7.10 Softmax Decision and Temperature
 
-**07-REQ-048**: At decision time the framework shall sample a direction for an automatic-mode snake by applying the softmax distribution to that snake's current stateMap entries. Specifically, each candidate direction's sampling probability shall be proportional to `exp(stateMap[direction] / T)` where `T` is the snake's effective temperature per 07-REQ-056. Sampling shall use a source of randomness scoped to the Centaur Server; no requirement is placed on which source.
+**07-REQ-048**: At decision time the framework shall sample a direction for an automatic-mode snake by applying the softmax distribution to that snake's current stateMap entries. Specifically, each candidate direction's sampling probability shall be proportional to `exp(stateMap[direction] / T)` where `T` is the snake's effective temperature per 07-REQ-056. Sampling shall use a source of randomness scoped to the Snek Centaur Server process; no requirement is placed on which source.
 
 **07-REQ-049**: The softmax distribution shall be evaluated over the current set of candidate directions for the snake (07-REQ-019). Directions for which the stateMap entry is undefined at decision time shall be excluded from the distribution. If no candidate directions have a defined stateMap entry at decision time, the framework shall fall back to staging the snake's `lastDirection` (per [01-REQ-042(b)]) or, on turn 0 with no lastDirection, shall stage nothing — letting [01-REQ-042(c)]'s random-choice fallback handle the move in turn resolution.
 
@@ -210,7 +210,7 @@ Within each tier, compute shall be allocated round-robin across snakes.
 
 ### 7.14 Action Log Obligations
 
-**07-REQ-062**: Every move the framework stages per 07-REQ-044 and 07-REQ-045 shall result in a move-staging action log entry per [06-REQ-036], with the actor identified as the Centaur Server per [06-REQ-034] and with the identity-type field set to Centaur Server. This is the bot-origin side of the writer-exclusivity rule in [06-REQ-037].
+**07-REQ-062**: Every move the framework stages per 07-REQ-044 and 07-REQ-045 shall result in a move-staging action log entry per [06-REQ-036], with the actor identified as the Snek Centaur Server acting via the per-Centaur-Team game credential per [06-REQ-034] and with the identity-type field set to bot. This is the bot-origin side of the writer-exclusivity rule in [06-REQ-037].
 
 **07-REQ-063**: Every computed display state snapshot the framework writes per 07-REQ-039 shall correspond to an action log entry of category "computed display state snapshot" per [06-REQ-036] and [06-REQ-037].
 
@@ -345,13 +345,13 @@ Consequence of the draft: a Drive whose terminal reward contributes to scoring i
 
 **Type**: Gap
 **Phase**: Requirements
-**Context**: 07-REQ-046 says manual-mode snakes are never staged by the framework. But for simulating teammates (07-REVIEW-002 Option A), the framework may need to read teammate staged moves from Convex/Centaur state or from SpacetimeDB. It's unclear in the informal spec where operator-staged moves for manual snakes physically live before SpacetimeDB receives them — is the operator's browser writing to SpacetimeDB directly via the admission ticket (per [03]'s human game-participant identity) or is the staging brokered through the Centaur Server?
+**Context**: 07-REQ-046 says manual-mode snakes are never staged by the framework. But for simulating teammates (07-REVIEW-002 Option A), the framework may need to read teammate staged moves from Convex/Centaur state or from SpacetimeDB. It's unclear in the informal spec where operator-staged moves for manual snakes physically live before SpacetimeDB receives them — is the operator's browser writing to SpacetimeDB directly via the admission ticket (per [03]'s human game-participant identity) or is the staging brokered through the Snek Centaur Server?
 
-If it's direct-to-SpacetimeDB, the framework reads it from its SpacetimeDB subscription like any other staged move. If it's brokered through the Centaur Server, the framework might have earlier visibility but there's a new API surface to specify. The current draft (07-REQ-034) assumes the framework can observe staged moves for its own team's snakes via some means, without pinning the mechanism.
+If it's direct-to-SpacetimeDB, the framework reads it from its SpacetimeDB subscription like any other staged move. If it's brokered through the Snek Centaur Server, the framework might have earlier visibility but there's a new API surface to specify. The current draft (07-REQ-034) assumes the framework can observe staged moves for its own team's snakes via some means, without pinning the mechanism.
 **Question**: Where are manual-mode operator-staged moves written, and how does the framework observe them?
 **Options**:
 - A: Operator browsers stage directly to SpacetimeDB via their game-participant admission ticket. The framework observes via SpacetimeDB subscription.
-- B: Operator browsers stage via the Centaur Server runtime, which re-stages to SpacetimeDB. The framework observes via its own runtime state and action log.
+- B: Operator browsers stage via the Snek Centaur Server runtime, which re-stages to SpacetimeDB. The framework observes via its own runtime state and action log.
 - C: Dual writes: operator browsers stage directly to SpacetimeDB and also record the action in the Centaur action log ([06-REQ-036]); the framework observes via either path.
 **Informal spec reference**: §7.5, §10 ("stage_move" reducer).
 

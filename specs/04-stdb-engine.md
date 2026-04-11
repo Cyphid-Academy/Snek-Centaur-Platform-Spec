@@ -38,7 +38,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 ### 4.3 Game Initialisation
 
-**04-REQ-013**: The runtime shall expose a **privileged initialisation operation** that may be called exactly once per instance, before any connection is admitted, by the Convex orchestration path described in [02-REQ-019]. The caller shall be authenticated per [03-REQ-048]. The operation shall accept, at minimum: the game configuration per [01]'s configurable parameters and [09.3] of the informal spec, the participating-team roster per [03-REQ-039], the admission-ticket validation secret per [03-REQ-022], and the initial chess-timer budget per team per [01-REQ-035].
+**04-REQ-013**: The runtime shall expose a **privileged initialisation operation** that may be called exactly once per instance, before any connection is admitted, by the Convex orchestration path described in [02-REQ-019]. The caller shall be authenticated per [03-REQ-048]. The operation shall accept, at minimum: the game configuration per [01]'s configurable parameters, the participating Centaur Team roster per [03-REQ-039], the admission-ticket validation secret per [03-REQ-022], and the initial chess-timer budget per Centaur Team per [01-REQ-035].
 
 **04-REQ-014**: Successful completion of the initialisation operation shall leave the runtime in a state where (a) the static board layout ([01-REQ-008] through [01-REQ-013]) is written, (b) each snake's initial state ([01-REQ-020], [01-REQ-021]) is written as the turn-0 snapshot, (c) initial food placements ([01-REQ-017]) are written as spawn-turn-0 items, (d) each team's initial time budget ([01-REQ-035]) is recorded, (e) the admission-ticket validation secret is available for use by the admission path (Section 4.4), and (f) the participating-team roster and per-team authorised human email addresses (per [03-REQ-023(d)(e)]) are available for use by the admission path.
 
@@ -54,9 +54,9 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-018**: The runtime shall expose a **connection registration operation** through which a connecting client presents an admission ticket per [03-REQ-019]. The operation shall validate the ticket per [03-REQ-021] and [03-REQ-023] using the admission-ticket validation secret seeded during initialisation (Section 4.3).
 
-**04-REQ-019**: Upon successful ticket validation, the runtime shall associate the calling connection's opaque connection identifier with the ticket's asserted team (except for spectator tickets, which associate no team per [03-REQ-026]) and asserted role (human participant, Centaur Server participant, or spectator). This association shall persist for the lifetime of the connection without further ticket re-checks, consistent with [03-REQ-021].
+**04-REQ-019**: Upon successful ticket validation, the runtime shall associate the calling connection's opaque connection identifier with the ticket's asserted Centaur Team (except for spectator tickets, which associate no team per [03-REQ-026]) and asserted role (human participant, bot participant, or spectator). This association shall persist for the lifetime of the connection without further ticket re-checks, consistent with [03-REQ-021].
 
-**04-REQ-020**: The runtime shall maintain, for the full lifetime of the game instance, a **participant attribution record** that maps each connection identifier that has successfully registered to enough information to later resolve it, at replay export time, to either (a) the email address of a human participant or (b) a reference identifying the Centaur Server participant of a specific team. This record shall be populated on each successful registration from the ticket contents. (Satisfies [03-REQ-044].)
+**04-REQ-020**: The runtime shall maintain, for the full lifetime of the game instance, a **participant attribution record** that maps each connection identifier that has successfully registered to enough information to later resolve it, at replay export time, to either (a) the email address of a human participant or (b) a reference identifying the bot participant of a specific Centaur Team. This record shall be populated on each successful registration from the ticket contents. (Satisfies [03-REQ-044].)
 
 **04-REQ-021**: The participant attribution record shall not be mutated or deleted when the underlying connection is closed, whether by network interruption, client shutdown, or reconnection. A client that reconnects shall obtain a fresh connection identifier and a fresh attribution entry; previous entries remain intact so that historical `stagedBy` references from earlier turns remain resolvable.
 
@@ -68,7 +68,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 ### 4.5 Move Staging
 
-**04-REQ-024**: The runtime shall expose a **move-staging operation** that accepts, from a registered connection, a snake identifier and a direction ([01-REQ-001]). The runtime shall accept the operation only if the calling connection is registered as a human participant or Centaur Server participant for the team that owns the named snake; all other callers shall be rejected. (Satisfies [03-REQ-028] within the runtime.)
+**04-REQ-024**: The runtime shall expose a **move-staging operation** that accepts, from a registered connection, a snake identifier and a direction ([01-REQ-001]). The runtime shall accept the operation only if the calling connection is registered as a human participant or bot participant for the Centaur Team that owns the named snake; all other callers shall be rejected. (Satisfies [03-REQ-028] within the runtime.)
 
 **04-REQ-025**: At any instant during a turn, the runtime shall retain at most one staged move per snake. A new staged move for a snake whose previous staged move has not yet been consumed by turn resolution shall overwrite the previous staged move. Overwrite is the sole mechanism for changing a staged move; there is no separate cancel-move operation. (Satisfies [02-REQ-011].)
 
@@ -78,7 +78,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-028**: The runtime shall not validate move legality (e.g., reject moves that lead into walls) at the moment of staging. Legality is determined only during turn resolution, where a fatal direction kills the snake in Phase 3 per [01-REQ-044]. This preserves the "explore a direction to see its score" affordance described in [08]'s live-operator interface.
 
-**04-REQ-029** *(negative)*: The runtime shall not permit a connection to stage a move for a snake belonging to a team other than the team the connection was admitted for, even if a connection identifier from the opposing team's admission is supplied in a spoofed parameter. Team membership is the connection-level association established in Section 4.4 and cannot be asserted per-call.
+**04-REQ-029** *(negative)*: The runtime shall not permit a connection to stage a move for a snake belonging to a Centaur Team other than the Centaur Team the connection was admitted for, even if a connection identifier from the opposing team's admission is supplied in a spoofed parameter. Centaur Team membership is the connection-level association established in Section 4.4 and cannot be asserted per-call.
 
 ---
 
@@ -268,7 +268,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **Decision**: Option B — add `hazard_damage` as a tenth event kind `(j)` in 04-REQ-043, emitted for each surviving snake that took hazard damage in Phase 5b.
 **Rationale**: Option A was in tension with 04-REQ-044 ("event records shall not require the client to diff successive snake-state snapshots to recover information that the event describes"). Hazard damage to a surviving snake is exactly the kind of state change whose signal would otherwise be carried only by a snapshot diff. Option B also unlocks downstream analytics. Option C is rejected as gratuitous event-volume overhead — starvation is already carried by the death event (b) with cause `starvation`, and a per-turn `health_tick` event would be redundant with per-turn snake state.
-**Affected requirements/design elements**: 04-REQ-043 extended with entry `(j) Hazard damage`. Informal spec §14's closed set is now superseded by [04-REQ-043] on this point. **Downstream impact**: when [08] team replay viewer and [09] platform replay viewer consume the closed event set, they must include hazard_damage in their renderers.
+**Affected requirements/design elements**: 04-REQ-043 extended with entry `(j) Hazard damage`. Informal spec §14's closed set is now superseded by [04-REQ-043] on this point. **Downstream impact**: when [08]'s replay viewer consumes the closed event set, it must include hazard_damage in its renderers.
 
 ---
 
