@@ -582,7 +582,7 @@ In both modes, the Drive is added to the snake's portfolio with its default weig
 
 ## 8. Game Platform Interface
 
-The Game Platform is a Svelte web application backed by Convex. It is the primary interface for all activity outside of live gameplay — team management, room administration, game configuration, spectating, replay viewing, and player/team history. All users authenticate via Google OAuth.
+The Game Platform comprises a **Game Platform Server** (deployed on platform infrastructure such as Vercel or Cloudflare) and the **Game Platform Client** (a Svelte web application running in the browser). This mirrors the Centaur Server / Operator Client split described in Section 7. The Game Platform Client is backed by Convex and is the primary interface for all activity outside of live gameplay — team management, room administration, game configuration, spectating, replay viewing, and player/team history. All users authenticate via Google OAuth.
 
 ### 8.1 Home and Navigation
 

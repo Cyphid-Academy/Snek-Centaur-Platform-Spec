@@ -154,17 +154,17 @@ The platform is composed of exactly three runtime kinds, each with a distinct li
 │  Game lifecycle orchestration                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────────┐  ┌───────────────────────┐  ┌─────────────────────┐
-│ SpacetimeDB Instance│  │ Centaur Server (Team)  │  │ Game Platform       │
-│ (per started game)  │  │                        │  │ (Svelte web app)    │
-│                     │  │ Bot computation        │  │                     │
-│ Transient game state│  │ Serves operator app    │  │ Cross-team UI       │
-│ Authoritative rules │  │                        │  │ Serves spectator app│
-│ Append-only log     │  └───────────┬────────────┘  └──────────┬──────────┘
-└─────────────────────┘        serves│                    serves│
-                          ┌──────────▼──────────┐    ┌──────────▼──────────┐
-                          │ Operator Client      │    │ Spectator Client    │
-                          └─────────────────────┘    └─────────────────────┘
+┌─────────────────────┐  ┌───────────────────────┐  ┌───────────────────────┐
+│ SpacetimeDB Instance│  │ Centaur Server         │  │ Game Platform Server  │
+│ (per started game)  │  │ (per team)             │  │                       │
+│                     │  │                        │  │ Serves Game Platform  │
+│ Transient game state│  │ Bot computation        │  │   Client (Svelte app) │
+│ Authoritative rules │  │ Serves Operator Client │  │                       │
+│ Append-only log     │  └───────────┬────────────┘  └───────────┬───────────┘
+└─────────────────────┘        serves│                     serves│
+                          ┌──────────▼──────────┐    ┌───────────▼───────────┐
+                          │ Operator Client      │    │ Game Platform Client  │
+                          └─────────────────────┘    └───────────────────────┘
 ```
 
 **Runtime connections:**
@@ -174,11 +174,11 @@ The platform is composed of exactly three runtime kinds, each with a distinct li
 | SpacetimeDB | Convex | HTTP (discrete) | Game-end notification, replay export |
 | Centaur Server | Convex | Convex client | Centaur subsystem state (subscribe + write) |
 | Centaur Server | SpacetimeDB | WebSocket | Game state subscription, move staging |
-| Game Platform | Convex | Convex client | Platform state (rooms, games, config) |
+| Game Platform Server | Convex | Convex client | Platform state (rooms, games, config) |
 | Operator Client | SpacetimeDB | WebSocket | Game state subscription, move staging, turn declaration |
 | Operator Client | Convex | Convex client | Centaur subsystem state (selection, drives, action log) |
-| Spectator Client | SpacetimeDB | WebSocket (read-only) | Game state subscription |
-| Spectator Client | Convex | Convex client | Platform state (reactive game/room updates) |
+| Game Platform Client | SpacetimeDB | WebSocket (read-only) | Game state subscription (spectating) |
+| Game Platform Client | Convex | Convex client | Platform state (reactive game/room updates) |
 
 **Data ownership boundaries**:
 
@@ -340,7 +340,7 @@ export {
 |----------|----------------|-------|-----------|
 | SpacetimeDB game module | SpacetimeDB TypeScript module runtime | `resolveTurn()` inside `resolve_turn` reducer; `generateBoardAndInitialState()` inside `initialize_game` reducer | **Authoritative** — only execution whose output becomes committed game state |
 | Centaur Server library | Node.js (or Deno/Bun) server | `resolveTurn()` for simulation/world-tree exploration; domain types for state interpretation | **Simulation only** — output used for bot decisions, never committed directly |
-| Web clients (operator + spectator + Game Platform) | Browser | Domain types for rendering; `resolveTurn()` for pre-validation and animation prediction; `invulnerabilityLevel()` / `isVisible()` for display logic | **Display only** — output used for rendering, never committed |
+| Web clients (Operator Client + Game Platform Client) | Browser | Domain types for rendering; `resolveTurn()` for pre-validation and animation prediction; `invulnerabilityLevel()` / `isVisible()` for display logic | **Display only** — output used for rendering, never committed |
 
 **Compatibility constraint**. Because the codebase executes in three different JavaScript runtimes, it must:
 - Use only ECMAScript standard library APIs (no Node.js-specific APIs, no browser-specific APIs).
@@ -372,10 +372,10 @@ Operator Browser
 
 The SpacetimeDB connection provides low-latency game state and real-time move staging. The Convex connection provides Centaur subsystem state (which is not in SpacetimeDB) and supports the operator coordination features (selection, Drive management, action logging). Both connections authenticate independently: the SpacetimeDB connection uses an HMAC-signed admission ticket ([03]), and the Convex connection uses the operator's Google OAuth session.
 
-**Spectator dual-connection model** (02-REQ-041). The spectator web application is served by the Game Platform. Each spectator's browser client maintains two simultaneous connections:
+**Game Platform Client dual-connection model** (02-REQ-041). The Game Platform Client is a Svelte web application served by the Game Platform Server — parallel to how the Operator Client is served by the Centaur Server. The Game Platform Client handles all cross-team and platform-level UI, including live spectating. When spectating a game, the Game Platform Client maintains two simultaneous connections:
 
 ```
-Spectator Browser
+Game Platform Client (spectating)
 ├── WebSocket → SpacetimeDB instance (read-only)
 │   └── Subscribe: game state (filtered by RLS, no reducer calls)
 │
@@ -383,9 +383,9 @@ Spectator Browser
     └── Subscribe: platform state (game record, room state)
 ```
 
-The SpacetimeDB connection uses a read-only admission ticket ([03]) that authorizes subscription queries but does not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectator connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). The Convex connection provides reactive platform state updates (game record status, room state). Spectators have no access to Centaur subsystem state — their Convex queries are restricted to platform-wide tables.
+The SpacetimeDB connection uses a read-only admission ticket ([03]) that authorizes subscription queries but does not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectating connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). The Convex connection provides reactive platform state updates (game record status, room state). The Game Platform Client has no access to Centaur subsystem state — its Convex queries are restricted to platform-wide tables. Outside of spectating, the Game Platform Client uses only its Convex client connection for platform features (rooms, profiles, leaderboards).
 
-**Operator web app serving** (02-REQ-040, 02-REQ-042). The operator web application is served by the team's Centaur Server, not by the Game Platform — the operator UI is a separate deployed application. The Centaur Server serves static assets (HTML, JS, CSS) over HTTP and the browser client establishes the dual connections described above.
+**Operator web app serving** (02-REQ-040, 02-REQ-042). The Operator Client is served by the team's Centaur Server, not by the Game Platform Server — the two are distinct deployed applications. The Centaur Server serves static assets (HTML, JS, CSS) over HTTP and the Operator Client establishes the dual connections described above.
 
 ### 2.16 Game Platform vs. Centaur Server Boundary Design
 
@@ -393,18 +393,18 @@ Satisfies 02-REQ-043 through 02-REQ-049.
 
 **Two distinct applications**. The platform comprises two web applications with non-overlapping UI scope:
 
-| Application | Served By | Technology | Scope |
-|-------------|-----------|------------|-------|
-| **Game Platform** | Platform infrastructure (e.g., Vercel, Cloudflare) | Svelte ([09]) | Cross-team: home, team identity management, Centaur Server registration, member management, timekeeper assignment, room browsing/creation, room lobby/game config, live spectating, platform replay viewer, player profiles, team profiles, leaderboards |
-| **Centaur Server Web App** | Each team's Centaur Server | Determined by library reference app ([08]) | Team-internal: heuristic config, bot parameter config, live operator interface, team-perspective replay viewer with sub-turn timeline |
+| Server | Client | Technology | Scope |
+|--------|--------|------------|-------|
+| **Game Platform Server** (platform infrastructure, e.g. Vercel/Cloudflare) | **Game Platform Client** | Svelte ([09]) | Cross-team: home, team identity management, Centaur Server registration, member management, timekeeper assignment, room browsing/creation, room lobby/game config, live spectating, platform replay viewer, player profiles, team profiles, leaderboards |
+| **Centaur Server** (per team) | **Operator Client** | Determined by library reference app ([08]) | Team-internal: heuristic config, bot parameter config, live operator interface, team-perspective replay viewer with sub-turn timeline |
 
 **Negative boundary constraints**. The following are architectural constraints, not just UI omissions — they reflect the data ownership model:
 
-- The Game Platform has no access to bot parameters, heuristic configuration, or Drive state (02-REQ-045, 02-REQ-046, 02-REQ-047). These are Centaur subsystem concerns written and read through the Centaur Server's Convex subscription. The Game Platform's Convex queries should not read Centaur subsystem data.
-- The Game Platform's team management page exposes only identity, server registration, member management, and timekeeper assignment (02-REQ-048). It does not expose per-snake configuration, Drive portfolios, or temperature settings.
-- The Centaur Server web application does not provide room creation, room browsing, leaderboards, or platform-wide profiles (02-REQ-049). It has no concept of "rooms" or "the platform" — it operates within the scope of a single team's games.
+- The Game Platform Client has no access to bot parameters, heuristic configuration, or Drive state (02-REQ-045, 02-REQ-046, 02-REQ-047). These are Centaur subsystem concerns written and read through the Centaur Server's Convex subscription. The Game Platform Client's Convex queries should not read Centaur subsystem data.
+- The Game Platform Client's team management page exposes only identity, server registration, member management, and timekeeper assignment (02-REQ-048). It does not expose per-snake configuration, Drive portfolios, or temperature settings.
+- The Operator Client does not provide room creation, room browsing, leaderboards, or platform-wide profiles (02-REQ-049). It has no concept of "rooms" or "the platform" — it operates within the scope of a single team's games.
 
-**Rationale**. This boundary cleanly separates concerns: the Game Platform handles everything visible to all users (public/cross-team), while the Centaur Server web app handles everything that is competitive-sensitive and team-internal. This separation means a team's bot strategy configuration is never exposed through the Game Platform's Convex queries, even accidentally. It also allows teams to customize their operator UI (02-REQ-032c) without affecting the platform-wide experience.
+**Rationale**. This boundary cleanly separates concerns: the Game Platform Client handles everything visible to all users (public/cross-team), while the Operator Client handles everything that is competitive-sensitive and team-internal. This separation means a team's bot strategy configuration is never exposed through the Game Platform Client's Convex queries, even accidentally. It also allows teams to customize their Operator Client UI (02-REQ-032c) without affecting the platform-wide experience.
 
 ---
 
@@ -536,8 +536,8 @@ export {
 |----------|--------|-----------------|-----------------|
 | SpacetimeDB game module | [04] | Full export set; `resolveTurn()` + `generateBoardAndInitialState()` for authoritative execution | Authoritative |
 | Centaur Server library | [07], [08] | Full export set; `resolveTurn()` for simulation | Simulation only |
-| Game Platform web app | [09] | Domain types for rendering; `resolveTurn()` for pre-validation | Display only |
-| Operator web app | [08] | Domain types for rendering; `resolveTurn()` for pre-validation | Display only |
+| Game Platform Client | [09] | Domain types for rendering; `resolveTurn()` for pre-validation | Display only |
+| Operator Client | [08] | Domain types for rendering; `resolveTurn()` for pre-validation | Display only |
 
 **DOWNSTREAM IMPACT**: The shared engine codebase must use only ECMAScript standard library APIs (no runtime-specific APIs) because it runs in SpacetimeDB's TypeScript runtime, Node.js/Deno/Bun (Centaur Servers), and browsers. The BLAKE3 dependency for `subSeed()` (per Module 01 DOWNSTREAM IMPACT note 4) must be available in all three environments.
 
@@ -609,13 +609,17 @@ export interface OperatorConnectionModel {
   }
 }
 
-export interface SpectatorConnectionModel {
+export interface GamePlatformClientConnectionModel {
   readonly spacetimeDb: {
     readonly transport: 'WebSocket'
     readonly authMechanism: 'Read-only HMAC admission ticket via register reducer'
     readonly capabilities: readonly ['subscribe_game_state']
+  } | null
+  readonly convex: {
+    readonly transport: 'Convex client (HTTP/WebSocket)'
+    readonly authMechanism: 'Google OAuth session'
+    readonly capabilities: readonly ['subscribe_platform_state']
   }
-  readonly convex: null
 }
 
 export interface CentaurServerConnectionModel {
@@ -632,7 +636,7 @@ export interface CentaurServerConnectionModel {
 }
 ```
 
-**DOWNSTREAM IMPACT**: [03] must issue distinct admission ticket types for operators (role: `human`), Centaur Servers (role: `centaur`), and spectators (role: `spectator`, read-only). [04] must enforce capability restrictions based on the ticket's role — spectators cannot call `stage_move` or `declare_turn_over`. [09] must implement the spectator connection flow. [08] must implement the operator dual-connection flow.
+**DOWNSTREAM IMPACT**: [03] must issue distinct admission ticket types for operators (role: `human`), Centaur Servers (role: `centaur`), and spectators (role: `spectator`, read-only). [04] must enforce capability restrictions based on the ticket's role — spectators cannot call `stage_move` or `declare_turn_over`. [09] must implement the Game Platform Client connection model: always-on Convex client for platform state, plus a conditional SpacetimeDB WebSocket connection when spectating a live game. [08] must implement the operator dual-connection flow.
 
 ### 3.9 Web Application Boundary
 
@@ -664,7 +668,7 @@ export interface WebApplicationBoundary {
 }
 ```
 
-**DOWNSTREAM IMPACT**: [09] must not build UI for any item in `gamePlatform.excludes`. [08] must not build UI for any item in `centaurServerApp.excludes`. The `centaur_server_registration` feature on the Game Platform is limited to registering the domain URL and triggering healthchecks — no bot or heuristic configuration.
+**DOWNSTREAM IMPACT**: [09] must not build UI for any item in `gamePlatform.excludes`. [08] must not build UI for any item in `centaurServerApp.excludes`. The `centaur_server_registration` feature on the Game Platform Client is limited to registering the domain URL and triggering healthchecks — no bot or heuristic configuration.
 
 ### 3.10 DOWNSTREAM IMPACT Notes
 
