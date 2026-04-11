@@ -152,24 +152,33 @@ The platform is composed of exactly three runtime kinds, each with a distinct li
 │  Persistent state: users, teams, rooms, games, replays, centaur state  │
 │  Identity & credential infrastructure (owned by [03])                  │
 │  Game lifecycle orchestration                                          │
-└──────────┬──────────────────┬──────────────────────┬────────────────────┘
-           │ HTTP/Convex       │ HTTP/Convex           │ Convex client
-           │ client            │ client                │
-┌──────────▼──────────┐  ┌────▼─────────────────┐  ┌──▼───────────────────┐
-│ SpacetimeDB Instance│  │ Centaur Server (Team) │  │ Game Platform        │
-│ (per started game)  │◄─┤ WebSocket subscription│  │ (Svelte web app)     │
-│                     │  │ to STDB               │  │                      │
-│ Transient game state│  │ Bot computation       │  │ Cross-team UI        │
-│ Authoritative rules │  │ Operator web app      │  │ Spectator UI         │
-│ Append-only log     │  │ Convex subscription   │  └──────────┬───────────┘
-└──────────▲──────────┘  └───────────────────────┘             │
-           │ WebSocket                                         │ WebSocket
-           │                                                   │ (spectator)
-     ┌─────┴──────────┐                                  ┌─────▼──────────┐
-     │ Operator Client │                                  │ Spectator      │
-     │ (dual-connect)  │                                  │ Client         │
-     └────────────────┘                                  └────────────────┘
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────┐  ┌───────────────────────┐  ┌─────────────────────┐
+│ SpacetimeDB Instance│  │ Centaur Server (Team)  │  │ Game Platform       │
+│ (per started game)  │  │                        │  │ (Svelte web app)    │
+│                     │  │ Bot computation        │  │                     │
+│ Transient game state│  │ Serves operator app    │  │ Cross-team UI       │
+│ Authoritative rules │  │                        │  │ Serves spectator app│
+│ Append-only log     │  └───────────┬────────────┘  └──────────┬──────────┘
+└─────────────────────┘        serves│                    serves│
+                          ┌──────────▼──────────┐    ┌──────────▼──────────┐
+                          │ Operator Client      │    │ Spectator Client    │
+                          └─────────────────────┘    └─────────────────────┘
 ```
+
+**Runtime connections:**
+
+| From | To | Protocol | Purpose |
+|------|-----|----------|---------|
+| SpacetimeDB | Convex | HTTP (discrete) | Game-end notification, replay export |
+| Centaur Server | Convex | Convex client | Centaur subsystem state (subscribe + write) |
+| Centaur Server | SpacetimeDB | WebSocket | Game state subscription, move staging |
+| Game Platform | Convex | Convex client | Platform state (rooms, games, config) |
+| Operator Client | SpacetimeDB | WebSocket | Game state subscription, move staging, turn declaration |
+| Operator Client | Convex | Convex client | Centaur subsystem state (selection, drives, action log) |
+| Spectator Client | SpacetimeDB | WebSocket (read-only) | Game state subscription |
+| Spectator Client | Convex | Convex client | Platform state (reactive game/room updates) |
 
 **Data ownership boundaries**:
 
@@ -345,7 +354,7 @@ export {
 
 Satisfies 02-REQ-038 through 02-REQ-042.
 
-**Operator dual-connection model** (02-REQ-038, 02-REQ-039). Each human operator's browser client maintains two simultaneous connections:
+**Operator dual-connection model** (02-REQ-038, 02-REQ-039, 02-REQ-040). The operator web application is served by the team's Centaur Server. Each human operator's browser client maintains two simultaneous connections:
 
 ```
 Operator Browser
@@ -363,9 +372,20 @@ Operator Browser
 
 The SpacetimeDB connection provides low-latency game state and real-time move staging. The Convex connection provides Centaur subsystem state (which is not in SpacetimeDB) and supports the operator coordination features (selection, Drive management, action logging). Both connections authenticate independently: the SpacetimeDB connection uses an HMAC-signed admission ticket ([03]), and the Convex connection uses the operator's Google OAuth session.
 
-**Spectator connection** (02-REQ-041). Spectators connect to SpacetimeDB via WebSocket using a read-only admission ticket ([03]). Read-only tickets authorize subscription queries but do not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectator connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). Spectators do not connect to Convex; they have no access to Centaur subsystem state.
+**Spectator dual-connection model** (02-REQ-041). The spectator web application is served by the Game Platform. Each spectator's browser client maintains two simultaneous connections:
 
-**Operator web app serving** (02-REQ-040). The operator web application is served by the team's Centaur Server, not by the Game Platform. This means the operator UI is a separate deployed application from the Game Platform, satisfying 02-REQ-042. The Centaur Server serves static assets (HTML, JS, CSS) over HTTP and the browser client establishes the dual connections described above.
+```
+Spectator Browser
+├── WebSocket → SpacetimeDB instance (read-only)
+│   └── Subscribe: game state (filtered by RLS, no reducer calls)
+│
+└── Convex client → Convex deployment
+    └── Subscribe: platform state (game record, room state)
+```
+
+The SpacetimeDB connection uses a read-only admission ticket ([03]) that authorizes subscription queries but does not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectator connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). The Convex connection provides reactive platform state updates (game record status, room state). Spectators have no access to Centaur subsystem state — their Convex queries are restricted to platform-wide tables.
+
+**Operator web app serving** (02-REQ-040, 02-REQ-042). The operator web application is served by the team's Centaur Server, not by the Game Platform — the operator UI is a separate deployed application. The Centaur Server serves static assets (HTML, JS, CSS) over HTTP and the browser client establishes the dual connections described above.
 
 ### 2.16 Game Platform vs. Centaur Server Boundary Design
 

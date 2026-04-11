@@ -627,7 +627,8 @@ The room lobby is the central hub for game setup. It displays current game confi
 Any authenticated user can spectate a game in progress from the platform (without joining a Centaur Team). The spectator view provides:
 
 - Full board display with all snakes, items, hazards, and fertile tiles
-- Real-time updates via SpacetimeDB subscription (spectators connect with a read-only admission ticket)
+- Real-time game state updates via SpacetimeDB subscription (spectators connect with a read-only admission ticket)
+- Reactive platform state updates via Convex client (game record status, room state)
 - Scoreboard showing team scores (combined alive snake lengths) and individual snake health/length
 - Turn number and team clock status
 - Timeline scrubber for reviewing earlier turns within the current game (enabled by the append-only SpacetimeDB schema)
