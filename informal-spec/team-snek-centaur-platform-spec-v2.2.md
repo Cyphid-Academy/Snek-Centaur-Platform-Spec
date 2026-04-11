@@ -211,7 +211,9 @@ A **disruption** is any of the following events experienced by a snake during tu
 
 Item collection (food, invulnerability potions, invisibility potions) is explicitly *not* a disruption. This decouples food consumption from the potion-cancellation mechanism and lets re-collection refresh effects voluntarily.
 
-If a snake that is the active collector (holds a debuff) for a potion family suffers any disruption during turn resolution, the effect for that family is cancelled team-wide: all active effects of that family are removed from every alive teammate, and any pending effects of that family scheduled earlier in the same turn are discarded. The collector functions as a deliberate "weak link" for the family's active buffs. If the collector holds debuffs for both families simultaneously, both families cancel independently.
+If a snake that is the active collector (holds a debuff) for a potion family suffers any disruption during turn resolution, the effect for that family is cancelled team-wide: all active effects of that family are removed from every alive teammate. The collector functions as a deliberate "weak link" for the family's active buffs. If the collector holds debuffs for both families simultaneously, both families cancel independently.
+
+Cancellation removes active effects only. If a teammate collects a new potion of the same family later in the same turn (Phase 6), the pending rebuild is not affected by the cancellation and proceeds normally in Phase 9 — the re-collection supersedes the cancellation.
 
 ---
 
@@ -312,7 +314,7 @@ If potions enabled, (in)vulnerability potions and invisibility potions each spaw
 
 ### Phase 9: Effect Application and Expiry
 
-1. Apply all pending cancellations scheduled under Section 4.8: remove all active and pending effects of the cancelled families on every alive team member.
+1. Apply all pending cancellations scheduled under Section 4.8: remove all active effects of the cancelled families on every alive team member.
 2. Apply pending team rebuilds scheduled under Phase 6 with replace semantics: for each affected (snake, family) pair, remove any remaining active effect of that family and insert the rebuild's pending entry as active.
 3. Remove all active effects whose expiry turn has been reached.
 
