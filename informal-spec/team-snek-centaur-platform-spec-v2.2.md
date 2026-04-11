@@ -150,11 +150,11 @@ State per snake:
 
 - **Body**: Ordered list of cell positions
 - **Health**: Integer, starts at MaxHealth (configurable, default 100)
-- **Invulnerability level**: Integer, starts at 0. Positive = buffed, negative = vulnerable
-- **Active effects**: List of `{type: invuln_buff | invuln_debuff | invis_buff | invis_collector, expiryTurn: number}` entries
+- **Invulnerability level**: Derived value in {−1, 0, +1}, computed from active effects. +1 if the snake holds an invulnerability buff, −1 if it holds an invulnerability debuff, 0 otherwise. Not a stored field. A snake holds at most one active effect per family (invulnerability or invisibility), so there is no stacking.
+- **Active effects**: List of `{family: invulnerability | invisibility, state: buff | debuff, expiryTurn: number}` entries. At most one active effect per family per snake.
 - **Last direction**: The direction moved on the previous turn (used as fallback)
 - **Alive/dead status**
-- **Visible**: Boolean. False when under invisibility buff effect. Invisible snakes are hidden from opponent views.
+- **Visible**: Derived value. False if and only if the snake holds an active invisibility buff; otherwise true. A snake holding an invisibility debuff (the collector) remains visible. Not a stored field.
 
 At game start, every snake has length 3 with all three segments stacked on the same starting cell.
 
@@ -162,9 +162,9 @@ At game start, every snake has length 3 with all three segments stacked on the s
 
 **Food**: Occupies a cell. When a snake's head enters the cell, the food is consumed: the snake grows by one segment (tail duplicated next turn) and health is restored to MaxHealth.
 
-**(In)vulnerability Potion**: Occupies a cell. When a snake's head enters the cell, the collector receives an invulnerability debuff (level −1, 3 turns) and all alive teammates receive an invulnerability buff (level +1, 3 turns).
+**(In)vulnerability Potion**: Occupies a cell. When a snake's head enters the cell, a team-wide rebuild of the invulnerability family is scheduled: the collector receives an invulnerability debuff (3 turns) and all alive teammates receive an invulnerability buff (3 turns). Effects do not stack — re-collection by the same team refreshes (replaces) the existing invulnerability effects rather than incrementing levels. A team holds at most one coherent set of invulnerability effects at any time.
 
-**Invisibility Potion**: Occupies a cell. When a snake's head enters the cell, all alive teammates become invisible to opponent teams for 3 turns. The collector bears the standard potion-collector risk: any interaction (see Section 4.8) they suffer during the effect duration cancels the invisibility for all teammates. Invisible snakes are hidden from opponent team views at the SpacetimeDB RLS level via Row Level Security on the `snake_states` table, cross-referencing the `visible` flag and the querying connection's team membership. All game mechanics (collisions, severing, head-to-head) apply to invisible snakes normally on the server; invisibility is purely an information asymmetry.
+**Invisibility Potion**: Occupies a cell. When a snake's head enters the cell, a team-wide rebuild of the invisibility family is scheduled: the collector receives an invisibility debuff (3 turns) and all alive teammates receive an invisibility buff (invisible, 3 turns). The collector bears the standard potion-collector risk: any disruption (see Section 4.8) they suffer during the effect duration cancels the invisibility for all teammates. Effects do not stack — re-collection by the same team refreshes (replaces) the existing invisibility effects. Invisible snakes are hidden from opponent team views at the SpacetimeDB RLS level via Row Level Security on the `snake_states` table, cross-referencing the `visible` flag and the querying connection's team membership. All game mechanics (collisions, severing, head-to-head) apply to invisible snakes normally on the server; invisibility is purely an information asymmetry.
 
 **MVP bot behavior for invisibility**: Bot code naively simulates next board states with only the invisibility potion collector as the opponent. More intelligent detection of invisible snakes (e.g. inferring positions from last known location at earlier turns) is left as an exercise for coaches to implement in their Centaur Servers.
 
@@ -200,18 +200,18 @@ If fertile ground is enabled, a subset of inner non-wall, non-hazard cells are d
 
 The result is a spatially coherent set of tiles that looks organic — blobs at high clustering, scattered flecks at low clustering — with the density knob independently controlling total area coverage.
 
-### 4.8 Interactions
+### 4.8 Disruptions
 
-An **interaction** is any of the following events experienced by a snake during turn resolution:
+A **disruption** is any of the following events experienced by a snake during turn resolution. This set is closed:
 - **Death** (any cause: collision, starvation, severing)
 - **Severing** another snake's body
 - **Being severed** by another snake
-- **Receiving a body collision**: a foreign snake's head enters a cell occupied by this snake's body, killing the collider
+- **Receiving a body collision**: a foreign snake's head enters a cell occupied by this snake's body
 - **Entering a hazard cell**
-- **Eating food**
-- **Collecting any item** (including potions)
 
-Any potion collector that suffers an interaction before the effect of that potion expires will cancel the potion's effect for all affected teammates, including removing the collector's own `invuln_debuff` or `invis_collector` status. This applies uniformly to all potion types — both (in)vulnerability and invisibility.
+Item collection (food, invulnerability potions, invisibility potions) is explicitly *not* a disruption. This decouples food consumption from the potion-cancellation mechanism and lets re-collection refresh effects voluntarily.
+
+If a snake that is the active collector (holds a debuff) for a potion family suffers any disruption during turn resolution, the effect for that family is cancelled team-wide: all active effects of that family are removed from every alive teammate, and any pending effects of that family scheduled earlier in the same turn are discarded. The collector functions as a deliberate "weak link" for the family's active buffs. If the collector holds debuffs for both families simultaneously, both families cancel independently.
 
 ---
 
@@ -242,11 +242,11 @@ Each team has a **time budget** that depletes while that team's turn clock is ru
 
 ### Effect Immutability Principle
 
-**All buff/debuff status is frozen at the start of turn resolution.** Invulnerability levels, invisibility status, and all other effect states used during collision detection and interaction processing reflect the state that players observed when making their moves. Effects gained or lost during the current turn's resolution take effect at the start of the *next* turn.
+**All buff/debuff status is frozen at the start of turn resolution.** Invulnerability levels, invisibility status, and all other effect states used during collision detection and disruption evaluation reflect the state that players observed when making their moves. Effects gained or lost during the current turn's resolution take effect at the start of the *next* turn.
 
 This means:
 - A snake that collects a potion this turn does not gain/lose invulnerability during this turn's collision checks.
-- A vulnerable snake that dies this turn triggers ally buff cancellation, but that cancellation takes effect next turn, not retroactively within this turn.
+- An active collector (debuff holder) that is disrupted this turn triggers team-wide family cancellation, but that cancellation takes effect in Phase 9, not retroactively within earlier phases.
 - Invisibility gained this turn takes effect next turn.
 
 ### Phase 1: Move Collection
@@ -275,9 +275,8 @@ After all snakes have moved, evaluate collisions simultaneously:
 
 ### Phase 4: Pending Effect Changes from Collisions
 
-Record all effect changes triggered by collision outcomes, to be applied in Phase 10:
-- When a vulnerable snake (invulnerability level < 0, per frozen state) dies in Phase 3: schedule cancellation of all invulnerability buffs on their alive teammates.
-- When a potion collector suffers any interaction in Phase 3 (see Section 4.8): schedule cancellation of that potion's effects on their teammates and removal of the collector's own `invuln_debuff` or `invis_collector` status.
+Record all effect changes triggered by collision outcomes, to be applied in Phase 9:
+- For each snake that suffers any disruption in Phase 3 (death, severing, being severed, receiving a body collision) and is the active collector (holds a debuff) for at least one potion family: schedule team-wide, family-scoped cancellation per Section 4.8, based on Phase 3 outcomes read against each snake's start-of-turn effect state.
 
 ### Phase 5: Health, Hazards, and Food
 
@@ -285,27 +284,23 @@ For each surviving snake, apply the following in order. All health modifications
 
 **5a. Health tick**: Subtract 1 health from every surviving snake (starvation pressure, applied unconditionally).
 
-**5b. Hazard damage**: If a snake's head occupies a hazard cell, subtract **hazard damage** (configurable, default 15) from its health. This is independent of and additive with the health tick. Entering a hazard is an interaction (see Section 4.8) — if the snake is a potion collector, schedule cancellation of that potion's effects on teammates and removal of the collector's own `invuln_debuff` or `invis_collector` status.
+**5b. Hazard damage**: If a snake's head occupies a hazard cell, subtract **hazard damage** (configurable, default 15) from its health. This is independent of and additive with the health tick. Entering a hazard is a disruption (see Section 4.8) — if the snake is an active collector for a potion family, schedule team-wide cancellation of that family's effects per Section 4.8.
 
-**5c. Food consumption**: If a snake's head occupies a food cell, consume the food: the snake grows (tail duplicated next movement) and health is restored to MaxHealth. Eating food is an interaction — if the snake is a potion collector, schedule cancellation of that potion's effects on teammates and removal of the collector's own `invuln_debuff` or `invis_collector` status. A snake on a hazard cell containing food receives the hazard damage first, then the food healing (net: MaxHealth).
+**5c. Food consumption**: If a snake's head occupies a food cell, consume the food: the snake grows (tail duplicated next movement) and health is restored to MaxHealth. Eating food is *not* a disruption — it does not trigger potion cancellation. A snake on a hazard cell containing food receives the hazard damage first, then the food healing (net: MaxHealth).
 
-**5d. Starvation death**: After all health modifications are applied, any snake with health ≤ 0 dies of starvation. If the starving snake was vulnerable, schedule ally buff cancellation. If the starving snake was a potion collector, schedule cancellation of that potion's effects on teammates and removal of the collector's own `invuln_debuff` or `invis_collector` status (death is an interaction).
+**5d. Starvation death**: After all health modifications are applied, any snake with health ≤ 0 dies of starvation. Starvation death is a disruption (see Section 4.8). If the dead snake is an active collector for a potion family, schedule team-wide cancellation of that family's effects per Section 4.8.
 
 ### Phase 6: Potion Collection
 
-If potions are enabled, for each surviving snake whose head occupies a potion cell:
+If potions are enabled, for each surviving snake whose head occupies a potion cell, the potion is consumed. Phase 6 then aggregates by team and by potion family: for each team T and each family F such that at least one member of T consumed a potion of family F this turn, schedule a single team-wide rebuild:
 
-**(In)vulnerability potion:**
-- Schedule: collector receives `invuln_debuff` (level −1, expires in 3 turns) starting next turn
-- Schedule: all alive teammates receive `invuln_buff` (level +1, expires in 3 turns) starting next turn
-- Potion is consumed
+- Every snake of T that collected a potion of family F this turn receives `state = debuff`
+- Every other alive member of T receives `state = buff`
+- All affected members receive the same `expiryTurn = currentTurn + 3`
 
-**Invisibility potion:**
-- Schedule: collector receives `invis_collector` status (3 turns) starting next turn
-- Schedule: all alive teammates receive `invis_buff` (invisible, 3 turns) starting next turn
-- Potion is consumed
+If multiple snakes on the same team collect potions of the same family in the same turn, they all receive debuffs and non-collectors receive buffs — this is one coherent rebuild, not multiple independent applications.
 
-Collecting a potion is an interaction (see Section 4.8). If the collector is already a potion collector from a previous turn, this collection triggers cancellation of the earlier potion's effects on teammates and removes the collector's own `invuln_debuff` or `invis_collector` from that earlier potion.
+Potion collection is *not* a disruption (see Section 4.8). If the team already has active effects of the same family, re-collection replaces them — the new effects overwrite the prior ones with a refreshed expiry, rather than triggering a cancellation event or stacking.
 
 ### Phase 7: Food Spawning
 
@@ -317,9 +312,11 @@ If potions enabled, (in)vulnerability potions and invisibility potions each spaw
 
 ### Phase 9: Effect Application and Expiry
 
-1. Apply all pending effect changes scheduled during Phases 4–6 (buff cancellations, new potion effects). These become active for subsequent turns.
-2. Remove all effects whose expiry turn has been reached.
-3. Recalculate each snake's invulnerability level and visibility status from remaining active effects.
+1. Apply all pending cancellations scheduled under Section 4.8: remove all active and pending effects of the cancelled families on every alive team member.
+2. Apply pending team rebuilds scheduled under Phase 6 with replace semantics: for each affected (snake, family) pair, remove any remaining active effect of that family and insert the rebuild's pending entry as active.
+3. Remove all active effects whose expiry turn has been reached.
+
+`invulnerabilityLevel` and `visible` are derived from the resulting active effects per Section 4.2 and require no separate recomputation step.
 
 ### Phase 10: Win Condition Check
 
@@ -963,6 +960,6 @@ The `turn_events` table uses a fixed set of event types derived from the turn re
 
 **Effect events**:
 - `effect_applied`: `{snakeId, effectType, expiryTurn}`
-- `effect_cancelled`: `{snakeId, effectType, reason: collector_interaction | expiry}`
+- `effect_cancelled`: `{snakeId, effectType, reason: collector_disruption | expiry}`
 
 The client animation layer maps event types to visual effects. This is a closed set — no extensibility is needed since the game rules are fixed.
