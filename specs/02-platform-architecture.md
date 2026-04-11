@@ -84,11 +84,13 @@
 
 ### 2.5 Centaur Server Library
 
-**02-REQ-030**: The platform shall provide a Centaur Server library that packages the bot framework ([07]), the authentication handler ([03]), the healthcheck endpoint contract, the Convex schema bindings, and a reference operator web application.
+**02-REQ-030**: The platform shall provide a Centaur Server library that packages the bot framework ([07]), the authentication handler ([03]), the healthcheck endpoint contract, the Convex schema bindings, and data-layer APIs. The library does not include the operator web application itself; the operator app is delivered as a separate forkable reference implementation repository (see 02-REQ-032a).
 
 **02-REQ-031**: The Centaur Server library is the architecturally assumed implementation path for teams. The platform's design and documentation shall treat library-based Centaur Servers as the supported case and shall not be obligated to accommodate teams that build a Centaur Server without the library.
 
-**02-REQ-032**: The Centaur Server library shall expose a bounded extension surface limited to: (a) custom Drive implementations, (b) custom Preference implementations, and (c) optional customization of the operator web application. No other library-mediated extension points are sanctioned.
+**02-REQ-032**: The Centaur Server library shall expose a bounded extension surface limited to: (a) custom Drive implementations and (b) custom Preference implementations. No other library-mediated extension points are sanctioned. The operator web application is not an extension point of the library.
+
+**02-REQ-032a**: The platform shall maintain a Centaur Server reference implementation repository containing the full operator web application (all Svelte components), example Drives, example Preferences, and team Convex schema. Teams obtain and customise the operator app by forking this repository and modifying their fork directly — full source ownership, not a bounded extension point. Correctness is enforced by Convex function contracts ([06]) and security enforcement points external to the library (02-REQ-033).
 
 **02-REQ-033** *(negative)*: The platform shall not rely on teams' use of the Centaur Server library for any security or correctness invariant. All invariants that bound what a Centaur Server may do shall be enforced by mechanisms external to the library — specifically by SpacetimeDB authorization rules, Convex function contracts, and admission ticket validation ([03]) — and shall hold equally against a Centaur Server that bypasses the library entirely.
 
@@ -282,26 +284,28 @@ Satisfies 02-REQ-030 through 02-REQ-033.
 | Auth handler | [03] | Challenge-callback endpoint (`/.well-known/centaur-challenge`), JWT refresh loop |
 | Healthcheck handler | [02] | `GET /healthcheck` endpoint implementation |
 | Convex schema bindings | [05], [06] | Typed client for reading/writing Centaur subsystem state |
+| Data-layer APIs | [05], [06], [08] | Stable interface for reading game, Centaur, and operator state; consumed by the operator app |
 | Shared engine codebase | [01] via [02-REQ-034] | Domain types and turn-resolution for simulation |
-| Reference operator web app | [08] | Default operator UI; customizable by teams |
+
+The operator web application is **not** bundled in the library. It is delivered as a separate forkable reference implementation repository (02-REQ-032a).
 
 **Supported implementation path** (02-REQ-031). The Centaur Server library is the architecturally assumed way to build a Centaur Server. Platform documentation, example code, and support workflows treat library-based servers as the standard case. Teams that bypass the library and implement a Centaur Server from scratch must handle authentication, healthcheck, Convex state management, and bot computation independently. The platform is not obligated to accommodate non-library implementations — bugs or integration issues arising from bypassing the library are the team's responsibility. This does not affect security invariants, which are enforced externally regardless of library use (02-REQ-033).
 
-**Extension surface** (02-REQ-032). The library exposes exactly three extension points:
+**Extension surface** (02-REQ-032). The library exposes exactly two extension points:
 
 ```typescript
 interface CentaurServerConfig {
   readonly drives: ReadonlyArray<DriveRegistration>
   readonly preferences: ReadonlyArray<PreferenceRegistration>
-  readonly operatorApp?: OperatorAppCustomization
 }
 ```
 
 - **(a) Custom Drive implementations**: Teams register `Drive<T>` implementations conforming to [07]'s exported interface. Each Drive has a target type (`Snake` or `Cell`), scoring function, and eligible-targets predicate.
 - **(b) Custom Preference implementations**: Teams register `Preference` implementations conforming to [07]'s exported interface. Preferences are directionless heuristics (no target).
-- **(c) Operator web app customization**: Teams may optionally replace or extend the reference operator web application. The customization surface is bounded to UI presentation; the data layer (Convex subscriptions, SpacetimeDB connection) is not customizable.
 
 No other extension points exist. The library does not expose hooks for overriding authentication, healthcheck, bot scheduling, or the anytime submission pipeline.
+
+**Operator app: forkable reference implementation** (02-REQ-032a). The operator web application is maintained as a separate reference implementation repository, not as part of the library. Teams fork this repository to obtain the full Svelte-based operator UI, example Drives and Preferences, and team Convex schema. Customisation is unbounded — teams have full source ownership over their fork. The stable interface between the library and the operator app is the data-layer API surface (see [08-REQ-076]); correctness is enforced externally by Convex function contracts ([06]) and security enforcement points (02-REQ-033).
 
 **Security independence** (02-REQ-033). The platform's security invariants are enforced entirely outside the library:
 
@@ -314,6 +318,29 @@ No other extension points exist. The library does not expose hooks for overridin
 | Centaur Server identity | Challenge-callback protocol in [03] |
 
 A Centaur Server that bypasses the library entirely and speaks the raw SpacetimeDB WebSocket protocol + Convex HTTP API is bound by the same invariants. The library provides convenience, not security.
+
+### 2.13a Repository and Package Topology
+
+Satisfies 02-REQ-030, 02-REQ-032, 02-REQ-032a, 02-REQ-034.
+
+**Platform monorepo.** The platform is developed in a single monorepo that contains:
+
+- The **shared game engine** package (e.g., `@team-snek/engine`) — domain types and turn-resolution logic consumed by all runtimes (02-REQ-034).
+- The **Centaur Server library** package (e.g., `@team-snek/centaur-lib`) — bot framework, auth handler, healthcheck, Convex bindings, and data-layer APIs (02-REQ-030).
+- Platform infrastructure code (Convex functions, SpacetimeDB modules, Game Platform Client) that is not published as npm packages.
+
+Both the shared engine and the Centaur Server library are published to npm from this monorepo.
+
+**Reference implementation repository.** A separate repository (e.g., `team-snek/centaur-server-ref`) contains:
+
+- The complete operator web application — all Svelte components implementing [08].
+- Example Drive and Preference implementations demonstrating the library's extension surface.
+- Team Convex schema and configuration scaffolding.
+- A dependency on the published `@team-snek/centaur-lib` and `@team-snek/engine` packages.
+
+This repository is maintained by the platform team and serves as the canonical starting point for teams.
+
+**Fork-based team onboarding.** Teams obtain the operator app by forking the reference implementation repository. Within their fork, teams have full source ownership: they may modify, replace, or extend any Svelte component, add pages, change layouts, or restructure the UI as they see fit. The library's data-layer API surface ([08-REQ-076]) is the stable interface between `@team-snek/centaur-lib` and the operator app. Correctness invariants are enforced externally by Convex function contracts ([06]) and security enforcement points (02-REQ-033), not by the UI layer.
 
 ### 2.14 Shared Engine Codebase Design
 
@@ -544,19 +571,20 @@ export {
 
 ### 3.6 Centaur Server Extension Surface
 
-Motivated by 02-REQ-030, 02-REQ-032.
+Motivated by 02-REQ-030, 02-REQ-032, 02-REQ-032a.
 
 ```typescript
 export interface CentaurServerExtensionSurface {
   readonly drives: 'custom Drive<T> implementations per [07] interface'
   readonly preferences: 'custom Preference implementations per [07] interface'
-  readonly operatorApp: 'optional UI customization per [08] interface'
 }
 ```
 
-The extension surface is intentionally described by reference to downstream module interfaces rather than defining concrete types here, because the `Drive<T>` and `Preference` type signatures are owned by [07] and the operator app customization interface is owned by [08]. Module 02 exports only the *architectural fact* that exactly these three extension points exist and no others.
+The extension surface is intentionally described by reference to downstream module interfaces rather than defining concrete types here, because the `Drive<T>` and `Preference` type signatures are owned by [07]. Module 02 exports only the *architectural fact* that exactly these two extension points exist and no others.
 
-**DOWNSTREAM IMPACT**: [07] must export `Drive<T>` and `Preference` type signatures that teams program against. [08] must export an operator app customization interface. No additional extension points may be added without revising 02-REQ-032.
+The operator web application is not an extension point of the library. Teams customise the operator app by modifying their fork of the reference implementation repository (02-REQ-032a). The stable interface between the library and the operator app is the data-layer API surface exported by `@team-snek/centaur-lib` (see [08-REQ-076]).
+
+**DOWNSTREAM IMPACT**: [07] must export `Drive<T>` and `Preference` type signatures that teams program against. [08] defines the reference operator app delivered in the forkable repository; it does not export a customisation interface. The stable team-facing interface is the data-layer API surface exported by centaur-lib. No additional library extension points may be added without revising 02-REQ-032.
 
 ### 3.7 Security Enforcement Points
 

@@ -216,7 +216,7 @@
 
 ### 8.12 Data Source Abstraction
 
-**08-REQ-076**: The application shall implement a data-source abstraction under which the UI components of §§8.7–8.9d read board state, turn number, staged moves, chess-timer state, and computed display state through a uniform interface that the live mode binds to the current game's SpacetimeDB subscription and the current team's Centaur state subscription ([06-REQ-043]), and that the replay mode binds to the persisted replay and action log read from Convex ([05-REQ-040], [06-REQ-035]).
+**08-REQ-076**: The application shall implement a data-source abstraction under which the UI components of §§8.7–8.9d read board state, turn number, staged moves, chess-timer state, and computed display state through a uniform interface that the live mode binds to the current game's SpacetimeDB subscription and the current team's Centaur state subscription ([06-REQ-043]), and that the replay mode binds to the persisted replay and action log read from Convex ([05-REQ-040], [06-REQ-035]). This data-source abstraction is exported by `@team-snek/centaur-lib` and serves as the primary stable interface between the library and the operator web application, regardless of how teams modify the UI in their fork of the reference implementation repository ([02-REQ-032a]).
 
 **08-REQ-077**: A UI component of the live operator interface shall not be required to distinguish whether it is rendering live or replayed state. Read-only enforcement in replay mode shall be accomplished by the data-source abstraction refusing mutation operations, not by each UI component implementing a read-only branch of its own.
 
@@ -224,11 +224,11 @@
 
 ---
 
-### 8.13 Extension Surface
+### 8.13 Source Ownership and Customisation
 
-**08-REQ-079**: The application shall be delivered as the reference implementation portion of the Centaur Server library ([02-REQ-030]). Teams shall be permitted to customise the application under the bounded extension surface of [02-REQ-032(c)]: custom Drive implementations, custom Preference implementations, and optional customisation of the operator web application itself. No customisation shall relax any of the invariants stated in this module or in [06].
+**08-REQ-079**: The application shall be delivered in the Centaur Server reference implementation repository ([02-REQ-032a]), not as part of the Centaur Server library itself. Teams obtain the application by forking the reference repository and customise it by modifying their fork directly — full source ownership, not a bounded extension point. Teams may modify, replace, or extend any Svelte component, add pages, change layouts, or restructure the UI as they see fit. No customisation shall relax any of the invariants stated in this module or in [06]; correctness is enforced externally by Convex function contracts ([06]) and security enforcement points ([02-REQ-033]).
 
-**08-REQ-080** *(negative)*: No customisation of the application shall be relied upon for any security or correctness invariant, per [02-REQ-033]. All invariants that constrain Centaur-state mutations shall remain enforced by [06]'s function contract surface regardless of what a customised application chooses to present or hide. See REVIEW 08-REVIEW-009.
+**08-REQ-080** *(negative)*: No customisation of the application shall be relied upon for any security or correctness invariant, per [02-REQ-033]. All invariants that constrain Centaur-state mutations shall remain enforced by [06]'s function contract surface regardless of what a team's forked application chooses to present or hide.
 
 ---
 
@@ -363,9 +363,11 @@
 
 **Type**: Gap
 **Phase**: Requirements
-**Context**: [02-REQ-032(c)] permits "optional customization of the operator web application" as one of three extension points. Neither [02] nor [08]'s draft specifies what "customisation" means concretely: can a team replace entire pages? Inject arbitrary UI? Swap out the move interface? Override the board renderer? The boundary matters because aggressive customisation could present the operator with affordances inconsistent with [06]'s invariants even though those invariants remain enforced server-side. That is acceptable from a correctness standpoint per [02-REQ-033] / 08-REQ-080, but could be a poor user experience and might be worth bounding.
-**Question**: What is the intended scope of customisation — theming only, component swapping, or full page replacement?
-**Options**:
+**Status**: RESOLVED
+**Decision**: Full source ownership via fork (supersedes options A/B/C below). The operator web application is no longer an extension point of the Centaur Server library. Per [02-REQ-032a], teams obtain the operator app by forking the reference implementation repository and have complete freedom to modify any aspect of the UI — theming, component replacement, page restructuring, or full rewrites. The customisation scope is unbounded at the UI layer. Correctness is enforced externally by Convex function contracts ([06]) per [02-REQ-033], not by constraining what the UI may present. The data-source abstraction ([08-REQ-076]) exported by centaur-lib is the stable interface between the library and the operator app; teams' forks depend on this API surface for data access. This resolves the original gap: defining a bounded customisation interface within the library is unnecessary because the operator app is a separate forkable artifact, not a library extension point.
+**Original context**: [02-REQ-032(c)] (now removed) permitted "optional customization of the operator web application" as one of three extension points. Neither [02] nor [08]'s draft specified what "customisation" meant concretely: can a team replace entire pages? Inject arbitrary UI? Swap out the move interface? Override the board renderer? The boundary mattered because aggressive customisation could present the operator with affordances inconsistent with [06]'s invariants even though those invariants remained enforced server-side.
+**Original question**: What is the intended scope of customisation — theming only, component swapping, or full page replacement?
+**Original options**:
 - A: Theming and layout tweaks only. Functional components are fixed.
 - B: Component-level swapping with a stable component contract; functional boundaries preserved.
 - C: Full page replacement; only the data-source abstraction (§8.12) and [06]'s function contracts are load-bearing.
