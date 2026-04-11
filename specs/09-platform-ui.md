@@ -209,6 +209,7 @@
 ### 09-REVIEW-001: Board preview generation locality
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: [09-REQ-030] describes a miniature board preview that regenerates as the administrative actor edits room configuration parameters. The informal spec §8.4 says the preview is a "miniature rendering" with "approximate layout of fertile tiles, hazards, and snake starting territories given current settings." Two questions are underspecified: (a) is the preview generated client-side by running a JavaScript port of the board-construction algorithm owned by [01], or server-side by Convex calling into a shared engine codebase per [02-REQ-035]; (b) does the preview need to be deterministic with a seed such that locking one in ([09-REQ-031]) reliably reproduces the same layout at game start?
 **Question**: Where is the preview generated, and is determinism via seed required for lock-in to work?
 **Options**:
@@ -222,6 +223,7 @@
 ### 09-REVIEW-002: Who marks a team ready
 
 **Type**: Gap (inherited from 05-REVIEW-007)
+**Phase**: Requirements
 **Context**: [09-REQ-027] defers to [05] on which role within a team is permitted to mark the team ready. The informal spec §9.4 says "Captain or any operator", but 05-REVIEW-007 leaves the persistence and scope of readiness unresolved. Until 05-REVIEW-007 is resolved, the UI cannot fully specify its enablement logic.
 **Question**: Which roles within an enrolled team may mark the team ready and unmark it?
 **Options**:
@@ -235,6 +237,7 @@
 ### 09-REVIEW-003: Where a locked-in board preview is persisted
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [09-REQ-031] says lock-in of a board preview must cause the subsequent game-start orchestration of [05-REQ-032] to seed the game with the locked-in layout. But [05] does not currently have a requirement acknowledging this — [05-REQ-024] talks about parameter snapshots, not generated-content snapshots. A locked-in preview is neither a parameter value nor a derived-from-parameters quantity; it is a concrete board layout that needs to live somewhere in the Convex schema and be plumbed through to [04]'s `initialize_game` reducer.
 **Question**: Does the locked-in preview belong in the room record, the next-game's record, or in a separate preview table? And does it extend [05-REQ-032]'s required init payload?
 **Options**:
@@ -248,6 +251,7 @@
 ### 09-REVIEW-004: Public vs authenticated-only visibility of profiles and leaderboard
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The informal spec §8.7 and §8.8 describe Player Profile and Team Profile pages as "public" in one place and as accessible to "any authenticated user" in others. The current draft assumes authentication is required for all platform views ([09-REQ-006]) but this is in tension with the "public" framing. A related question is whether email addresses on Player Profiles should be visible to all authenticated users or only to the profile owner and their team-mates.
 **Question**: Are team and player profiles public (accessible without authentication) or authenticated-only? And what is the visibility scope of email addresses on Player Profiles?
 **Options**:
@@ -261,6 +265,7 @@
 ### 09-REVIEW-005: Deleted teams in leaderboards
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [05-REQ-015a] permits Centaur Team deletion while preserving historical participating-team snapshots. [09-REQ-065] currently says the leaderboard continues to resolve historical teams via snapshots, implying a deleted team could still appear in leaderboards under its historical identity. This may be undesirable — a team might be deleted because it was created in error, was used for spam, or belonged to a departed user — and the leaderboard may want to hide it. On the other hand, hiding it rewrites historical outcomes.
 **Question**: Should deleted Centaur Teams continue to appear in the global leaderboard?
 **Options**:
@@ -274,6 +279,7 @@
 ### 09-REVIEW-006: Discoverability of the Centaur Server web application from the Game Platform
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: [09-REQ-074] forbids the Game Platform UI from embedding or re-implementing the Centaur Server web application. But a team operator who lands on the Game Platform and wants to configure heuristics or Drives needs to be told where to go. The Team Management view ([09-REQ-014]) already displays the team's registered server domain; the question is whether the UI should *also* explicitly direct users to visit that domain to access bot/heuristic configuration.
 **Question**: Should the Game Platform UI provide an explicit link from the Team Management view to the team's Centaur Server web application, together with explanatory text about the division of responsibilities?
 **Options**:
@@ -287,6 +293,7 @@
 ### 09-REVIEW-007: Live spectating when invisibility is active
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: [09-REQ-037] says the spectator view honours invisibility filtering per [04-REQ-047] — i.e., invisible snakes simply are not delivered to spectator subscriptions. But the spectator is nonetheless a third-party observer whose scoreboard ([09-REQ-038]) aggregates alive-snake lengths per team. If a team has an invisible snake, the spectator's scoreboard either (a) reflects the reduced visible length (misleading — the snake is still alive), (b) reflects the true aggregate (requires server-side calculation with team privilege, violating the spectator-view data model), or (c) omits the invisible snake from the count while marking the score as "partial." This tension is not addressed by the informal spec.
 **Question**: How does the spectator scoreboard handle invisible snakes?
 **Options**:
@@ -300,6 +307,7 @@
 ### 09-REVIEW-008: Timeline scrubber data delivery for long games
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [09-REQ-041] asserts the spectator timeline scrubber leverages [04-REQ-057] historical reconstruction. [04-REQ-054]'s subscription patterns mention that a client joining mid-game can subscribe to full history. For short games this is fine, but for long games (tournament rounds, extended max-turn games) the initial delivery could be sizable. The question is whether the UI must demand full history up-front on entry to the spectator view or can lazily fetch historical slices as the user scrubs.
 **Question**: Does live spectating entry require an up-front full-history subscription, or does the UI fetch historical slices on demand?
 **Options**:
@@ -313,6 +321,7 @@
 ### 09-REVIEW-009: Game-in-progress discoverability on the home view
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: [09-REQ-010] says the home view lists "games currently in progress in which any of the user's Centaur Teams are participating." But the spectator affordance is available to *any* authenticated user — users may want to discover interesting games in progress even in rooms they have no team affiliation with. The informal spec §8.1 describes the home view narrowly around memberships and recents, leaving general discovery to the Room Browser. Whether a dedicated "live games" discovery surface is needed is not answered.
 **Question**: Should the home view or the Room Browser expose a dedicated listing of all games currently in progress regardless of team affiliation?
 **Options**:

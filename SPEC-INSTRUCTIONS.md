@@ -126,7 +126,7 @@ Write the Requirements section. This phase defines *what* the module must do.
 3. Ensure every requirement is testable.
 4. Trace upstream: where a requirement derives from or depends on a dependency module's requirement, note the dependency by ID.
 5. Identify requirements that are implicit in the informal spec but not explicitly stated — flag these for review.
-6. Identify ambiguities or contradictions in the informal spec — flag these as **REVIEW** items at the end of the Requirements section rather than silently resolving them.
+6. Identify ambiguities or contradictions in the informal spec — flag these in the module's REVIEW Items section (see REVIEW Item Format below) rather than silently resolving them.
 
 **Completion criteria:**
 - All behavioral content from the informal spec relevant to this module's scope has been captured as requirements.
@@ -301,13 +301,14 @@ Do not load or reference modules: [list peer/downstream modules to exclude]
 
 ## REVIEW Item Format
 
-When the agent identifies ambiguities, contradictions, or gaps during authoring, it records them in a **REVIEW** section at the end of the relevant module section. Each item uses the following format when first raised:
+When the agent identifies ambiguities, contradictions, or gaps during authoring, it records them in the module's single `## REVIEW Items` section. Each module has exactly one such section, positioned after the last content section (after Exported Interfaces for Phase-2-complete modules, after Requirements for Phase-1-only modules). Each item uses the following format when first raised:
 
 ```markdown
 ## REVIEW Items
 
 ### [MODULE_ID]-REVIEW-[NNN]: [Short title]
 **Type**: Ambiguity | Contradiction | Gap | Proposed Addition
+**Phase**: Requirements | Design
 **Context**: [What the agent was trying to specify when it encountered this]
 **Question**: [The specific question that needs human resolution]
 **Options** (if applicable):
@@ -329,6 +330,7 @@ The resolved form looks like this:
 ### [MODULE_ID]-REVIEW-[NNN]: [Short title] — **RESOLVED**
 
 **Type**: Ambiguity | Contradiction | Gap | Proposed Addition
+**Phase**: Requirements | Design
 **Context**: [unchanged]
 **Question**: [unchanged]
 **Options**:

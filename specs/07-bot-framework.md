@@ -223,6 +223,7 @@ Within each tier, compute shall be allocated round-robin across snakes.
 ### 07-REVIEW-001: Depth-1 scope as requirement vs design note
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The informal spec (§6 preamble) states "The MVP bot framework operates at depth-1 (single-ply lookahead). Multi-ply tree search is a future enhancement." 07-REQ-002 promotes this to a requirement, on the grounds that multi-ply would pervasively change the cache structure, reactive-input model, and compute scheduling, and a spec reader should be able to rely on "depth-1" as a binding contract. The alternative framing is that depth-1 is a current *design choice* that satisfies a more abstract requirement like "the framework shall produce per-direction worst-case scores that update continuously during the turn", and the depth statement belongs in Phase 2 Design.
 **Question**: Should "depth-1" be a binding requirement that a future multi-ply implementation would have to supersede via an explicit spec revision, or is it a design-phase choice recorded only in Module 07's eventual Design section?
 **Options**:
@@ -235,6 +236,7 @@ Within each tier, compute shall be allocated round-robin across snakes.
 ### 07-REVIEW-002: Teammates as foreign snakes
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: The informal spec's §6.6 talks about "foreign snakes" without specifying whether teammates are included. Physically, teammates are part of the world and affect turn resolution (body collisions, severings, food competition); excluding them from the lattice would make simulations systematically wrong whenever a Drive's outcome depends on teammate behaviour. 07-REQ-033 includes teammates, and 07-REQ-034 distinguishes observable teammate commitments (staged moves within the team) from unobservable opponent commitments (null). This is a plausible reading but is not explicitly stated in the informal spec.
 
 An alternative reading is that "foreign" means "opposing team" exclusively, and teammate interactions are handled by some other mechanism (e.g., cooperative scheduling so each team-snake simulates with teammates held at already-committed moves). The current draft does not adopt this reading because no such mechanism is described anywhere in the informal spec.
@@ -252,6 +254,7 @@ A subtle consequence of the current draft: a teammate snake that has been staged
 ### 07-REVIEW-003: Foreign snakes absent from the interest map — hold in place
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 07-REQ-020 and 07-REQ-032 together specify that a foreign snake with no interest-map entry contributes no dimension to the lattice and is "held at its current position" in simulation. This is what the informal spec §6.6 implies ("Y drops out of the lattice — it contributes no dimension and is held at its current position"), but "held at its current position" is only physically plausible on turn 0 or for a dying/stuck snake. On any later turn, a live foreign snake will certainly move somewhere; simulating it as stationary is a deliberate fiction. The informal spec accepts this because a Drive that doesn't care about Y's moves by definition doesn't care where Y ends up; scoring of those heuristics that *don't* mention Y is unaffected by Y's fictitious stasis. But heuristics that *do* care about Y and don't nominate any of Y's moves (plausible if a Drive only nominates the specific moves it considers interesting and treats others as "don't care") will implicitly score Y's stationary ghost.
 **Question**: Is "hold Y stationary" the right fill-in for dimensions absent from the interest map, or should there be a convention that a heuristic which cares about Y at all must nominate all of Y's plausible moves, even ones it treats as don't-care, so that Y is never absent from the lattice when the self snake scores anything that could depend on Y?
 **Options**:
@@ -265,6 +268,7 @@ A subtle consequence of the current draft: a teammate snake that has been staged
 ### 07-REVIEW-004: Concrete numeric constants (RANK_DECAY, submission interval)
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: The informal spec's §6.6 specifies `RANK_DECAY = 0.9` and §6.8 specifies a 100 ms scheduled submission interval. Both look like design choices rather than user-facing contracts: a different decay constant or interval would not invalidate the framework's contract to operators or downstream modules. The current draft leaves these concrete values to Phase 2 Design (07-REQ-028, 07-REQ-044) and treats the requirement as "there exists a rank-decay mechanism" and "there exists a scheduled submission interval", respectively.
 **Question**: Should these concrete numbers be pinned in Phase 1 Requirements (in case operators or testers need to assume specific values) or left flexible as Phase 2 design choices (the current draft's position)?
 **Options**:
@@ -278,6 +282,7 @@ A subtle consequence of the current draft: a teammate snake that has been staged
 ### 07-REVIEW-005: Final submission deadline awareness
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 07-REQ-045 requires the framework to execute a final submission pass immediately before the turn deadline, so that all dirty automatic-mode snakes are staged before the turn resolves. The chess timer ([01-REQ-034] through [01-REQ-040]) lives in SpacetimeDB, and the turn is declared over by explicit team declaration or per-turn clock expiry — neither of which is a clean "imminent deadline" signal the framework can precisely predict. Two complications:
 1. If the team's own declaration of turn over is what ends the turn, the framework needs to cooperate with whatever component issues that declaration (operator UI in [08]? a bot-framework component itself?) so that the final submission runs before declaration, not after.
 2. If the turn ends by clock expiry, the framework needs a near-zero-latency read on the per-turn clock to fire the final pass at the right moment.
@@ -295,6 +300,7 @@ The informal spec §6.8 just says "immediately before the turn deadline" without
 ### 07-REVIEW-006: Undefined stateMap entries at decision time
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 07-REQ-049 covers the edge case where no candidate direction has a defined stateMap entry at decision time (no cached world has yet been computed for the snake). It falls back to SpacetimeDB's own turn-0 random choice ([01-REQ-042(c)]) or continuation per `lastDirection`. A subtler case: some candidate directions have defined stateMap entries and others don't. The current draft excludes undefined directions from the softmax distribution, implicitly biasing decision toward directions the framework has had time to evaluate. This is reasonable in the general case but could under-explore: a direction that *would* have scored highest but got no compute time because priority pushed it to the back of the queue would be silently skipped.
 **Question**: When some candidate directions have defined stateMap entries and others don't, should the framework (a) sample only from defined ones (current draft), (b) treat undefined entries as neutral (score 0) and include them in the softmax, or (c) block decision until all candidates have at least one cached world?
 **Options**:
@@ -308,6 +314,7 @@ The informal spec §6.8 just says "immediately before the turn deadline" without
 ### 07-REVIEW-007: Retirement of a satisfied Drive — timing
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 07-REQ-010 says a Drive whose satisfaction predicate evaluated to true "in a given turn's observed state shall be removed from the snake's active portfolio at the turn's close." The informal spec §6.1 says "In the bot's live portfolio, a satisfied Drive is removed after the turn in which satisfaction is detected." The current draft treats "observed state" as meaning the authoritative post-turn-resolution board published by SpacetimeDB, not merely any simulated world where the predicate happened to fire. Removing on simulated satisfaction would be wrong, because a simulated world is a hypothesis, not reality — and multiple simulated worlds could disagree on whether satisfaction holds for the same Drive.
 
 Consequence of the draft: a Drive whose terminal reward contributes to scoring in a simulated world (via 07-REQ-010) still remains on the portfolio through that turn and is only retired once the next fresh board state arrives and the satisfaction predicate evaluates to true against it.
@@ -323,6 +330,7 @@ Consequence of the draft: a Drive whose terminal reward contributes to scoring i
 ### 07-REVIEW-008: Game-tree-cache clearing and mid-turn fresh boards
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 07-REQ-023 clears the game tree cache at the start of each fresh turn. "Start of turn" here is interpreted as the moment a new authoritative pre-turn board is published to SpacetimeDB subscribers. But between turns the cache is cleared and rebuilt from scratch, which is expensive relative to incremental update. The informal spec §6.6 acknowledges this is a deliberate simplification for the single-ply MVP and notes that multi-ply would retain deeper valid speculation. The question is whether there's a scenario in which the framework receives what it interprets as a "new turn" spuriously — e.g., because of a SpacetimeDB reconnection producing a state snapshot that looks like a new turn but is actually the current turn — and would unnecessarily clear the cache.
 **Question**: What is the exact trigger for clearing the cache, framed in terms of observable SpacetimeDB state?
 **Options**:
@@ -336,6 +344,7 @@ Consequence of the draft: a Drive whose terminal reward contributes to scoring i
 ### 07-REVIEW-009: Operator-staged moves for manual snakes and the framework's view of them
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 07-REQ-046 says manual-mode snakes are never staged by the framework. But for simulating teammates (07-REVIEW-002 Option A), the framework may need to read teammate staged moves from Convex/Centaur state or from SpacetimeDB. It's unclear in the informal spec where operator-staged moves for manual snakes physically live before SpacetimeDB receives them — is the operator's browser writing to SpacetimeDB directly via the admission ticket (per [03]'s human game-participant identity) or is the staging brokered through the Centaur Server?
 
 If it's direct-to-SpacetimeDB, the framework reads it from its SpacetimeDB subscription like any other staged move. If it's brokered through the Centaur Server, the framework might have earlier visibility but there's a new API surface to specify. The current draft (07-REQ-034) assumes the framework can observe staged moves for its own team's snakes via some means, without pinning the mechanism.
@@ -351,6 +360,7 @@ If it's direct-to-SpacetimeDB, the framework reads it from its SpacetimeDB subsc
 ### 07-REVIEW-010: Informal spec filename drift
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: Consistent with 02-REVIEW-001 and 06-REVIEW-007. Requirements in this module were extracted from `team-snek-centaur-platform-spec-v2.2.md` on the assumption it supersedes any v2.1 reference in SPEC-INSTRUCTIONS.md. Resolution is shared with the prior reviews.
 **Question**: Confirm v2.2 is canonical. See 02-REVIEW-001.
 **Informal spec reference**: N/A (meta).

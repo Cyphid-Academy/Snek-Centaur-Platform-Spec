@@ -1185,9 +1185,12 @@ export function resolveTurn(
 
 ---
 
+## REVIEW Items
 
+### 01-REVIEW-001: Phase 4 invuln-debuff cancellation rule redundancy — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: Phase 4 lists two distinct bullets: (1) "if a snake with frozen invulnerabilityLevel < 0 dies in Phase 3, schedule cancellation of all invuln_buffs on its alive teammates" and (2) "if a potion collector suffers any interaction in Phase 3, schedule cancellation of that potion's effects." Since invuln_debuff is only acquired by collecting an InvulnPotion, any snake with an active invuln_debuff is necessarily an active potion collector. A vulnerable snake dying in Phase 3 satisfies both rules simultaneously — rule (1) schedules ally invuln_buff cancellation, and rule (2) schedules the same plus removal of the collector's own debuff. The requirements originally captured both rules faithfully, but the human resolution confirmed that the collector's own debuff should also be removed. This means rule (1) is fully subsumed by rule (2) for the death case.
 **Question**: Is rule (1) intentionally belt-and-suspenders, or does it exist to cover a case where invuln_debuff can exist without the holder being an active collector (e.g., via a future mechanic or edge case in current rules)?
 **Options**:
@@ -1204,6 +1207,7 @@ export function resolveTurn(
 ### 01-REVIEW-002: Body segments of Phase-3-dying snakes as collision targets — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: Phase 3 evaluates all collisions simultaneously after Phase 2 movement. A snake dying from a wall collision or self-collision still has body segments at their Phase-2 positions at the moment of evaluation. The spec did not originally state whether another snake's head colliding with those segments in the same Phase 3 pass constitutes a valid body collision (01-REQ-044c).
 **Question**: Do body segments of snakes that are simultaneously dying in Phase 3 from wall or self-collision count as valid collision targets for other snakes in the same Phase 3 evaluation?
 **Options**:
@@ -1221,6 +1225,7 @@ export function resolveTurn(
 ### 01-REVIEW-003: Effect duration semantics (`expiryTurn` interpretation) — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: Effects have a "3 turn duration" and an `expiryTurn` field. Phase 9 removes "all effects whose expiry turn has been reached." If a potion is collected on turn T, its effects start next turn (T+1). "3 turns duration" presumably means the effect is active on turns T+1, T+2, T+3. The requirements use "3-turn duration" without committing to an `expiryTurn` value, deferring to Design.
 **Question**: Is `expiryTurn` the last turn on which the effect is active (removed in Phase 9 of turn T+4), the turn on which it is removed (removed in Phase 9 of turn T+3, active for T+1 and T+2 only), or something else?
 **Options**:
@@ -1238,6 +1243,7 @@ export function resolveTurn(
 ### 01-REVIEW-004: Dual-collector cancellation scope — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 01-REQ-029 (now retired) explicitly permitted a snake to be an active collector for both potion types simultaneously (one InvulnPotion and one InvisPotion, neither yet cancelled). 01-REQ-031 specified that when an active collector suffers any interaction, "the collector's own `invuln_debuff` and/or `invis_collector` effects shall be removed (for each type held), and all alive teammates' corresponding `invuln_buff` and/or `invis_buff` effects shall be removed." A literal reading is that one interaction burns both potion stacks at once. The informal spec (Section 4.8) uses the singular phrase "that potion's effect", which reads as though the authors were only picturing the single-collector case. The two readings diverge in behaviour when a dual collector suffers one interaction: either both stacks are cancelled, or only the stack causally associated with the triggering interaction is cancelled (and identifying which stack that is, for an interaction like eating food or taking hazard damage, is itself ill-defined).
 **Question**: When a dual-collector suffers a single interaction during turn resolution, is it (a) both potion stacks that are cancelled, or (b) only one stack (and if so, which)?
 **Options**:
@@ -1255,6 +1261,7 @@ export function resolveTurn(
 ### 01-REVIEW-005: Re-collection cross-contamination of unrelated potion stack — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 01-REQ-032 (now retired) specified that collecting potion type P while already holding an active collector status for P cancels the earlier P-stack before scheduling the new P-stack. Independently, per the original 01-REQ-030(g), any potion collection was an interaction, so if the collector also held an active stack of a different type Q, 01-REQ-031 implied Q was also cancelled by the interaction. Whether the Q-stack was cancelled when re-collecting P depended on the resolution of 01-REVIEW-004.
 **Question**: If a snake holds active collector stacks for both InvulnPotion and InvisPotion, and collects a *new* InvulnPotion, does the InvisPotion stack get cancelled as a side effect of the collection being an interaction?
 **Options**:
@@ -1290,6 +1297,7 @@ The rename from "interaction" to "disruption" reflects the narrower class: viole
 ### 01-REVIEW-006: Phase 1 turn-0 fallback direction — **RESOLVED**
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: The informal spec (Section 5, Phase 1) said on turn 0 with no staged move the snake moves "to the first available non-lethal adjacent cell, using deterministic tie-breaking by priority: Up → Right → Down → Left." The informal spec was silent on what happens if *all four* adjacent cells are lethal. 01-REQ-042(c) as originally drafted resolved this by adding a final unconditional "else Up" clause. This was a silent addition during Phase 1 extraction, surfaced here rather than resolved in-place.
 **Question**: Should the Phase 1 fallback include a final unconditional direction when all four adjacent cells are lethal, and if so, what?
 **Argument for keeping "else Up"**: Phase 1 must produce a direction for every alive snake. Without a final fallback, the rule is incomplete on the edge case. The edge case should be unreachable under normal configurations given wall-border + territory-constrained placement, but a defensive fallback removes an undefined behaviour class from the spec. "Else Up" is the deterministic default consistent with the priority order and causes an immediate wall death in Phase 3, which is a well-defined outcome.
@@ -1306,6 +1314,7 @@ The rename from "interaction" to "disruption" reflects the narrower class: viole
 ### 01-REVIEW-007: Parity × territory feasibility (gap) — RESOLVED
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 01-REQ-014 assigns inner cells to team territories by angular-sector overlap. 01-REQ-015 places each snake's starting head on a non-Wall, non-Hazard inner cell within its team's territory. 01-REQ-016 requires all starting heads across all teams to share the same parity (`(x + y) mod 2`), with the parity value chosen randomly. No requirement currently guarantees that every team's territory contains enough eligible cells of the chosen parity to seat `snakesPerTeam` heads. On small boards with many teams, high hazard percentage, and unlucky angular offset, a given team's territory could contain zero eligible cells of a particular parity.
 **Question**: How should game setup handle configurations where the parity choice + territory assignment + hazard placement combine to produce insufficient eligible cells for some team?
 **Options**:
@@ -1332,6 +1341,7 @@ The rename from "interaction" to "disruption" reflects the narrower class: viole
 ### 01-REVIEW-008: Snake growth never explicitly required (proposed addition) — RESOLVED
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: Neither 01-REQ-025 (food consumption) nor 01-REQ-046c (Phase 5 food consumption) states that the snake grows by one segment. Growth is implicit via 01-REQ-043's "if `ateLastTurn` is true, the tail segment is retained", which causes the next Phase 2 movement to preserve the tail. Functionally this is correct, but growth-as-observable-behaviour is not captured as a direct testable requirement. A future editor modifying Phase 2's tail-handling logic could break growth without failing any requirement's literal wording.
 **Question**: Should growth be captured as an explicit requirement independent of the `ateLastTurn` mechanism?
 **Proposed requirement**: "A snake that consumes food in Phase 5 shall have its body length increase by exactly one segment on its next Phase 2 movement, unless the snake has died in the intervening period."
@@ -1352,6 +1362,7 @@ The rename from "interaction" to "disruption" reflects the narrower class: viole
 ### 01-REVIEW-009: Initial food under-supply (gap) — RESOLVED
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 01-REQ-017 mandates spawning one food item per snake on eligible cells at game start (inner, non-Wall, non-Hazard, not occupied by snake body; additionally Fertile if fertile ground enabled). No requirement states the behaviour when eligible cells are fewer than the snake count. This is plausible on small boards with high hazard percentages and fertile-only mode enabled at low density. An implementation that naively samples without replacement would fail or loop indefinitely.
 **Question**: How should initial food placement handle the case where eligible cells < snake count?
 **Options**:
@@ -1378,6 +1389,7 @@ The rename from "interaction" to "disruption" reflects the narrower class: viole
 ### 01-REVIEW-010: Effect-source tracking via `sourceCollectorSnakeId` — **RESOLVED**
 
 **Type**: Proposed Addition
+**Phase**: Design
 **Context**: Writing the Phase 9 cancellation design (Section 2.7 / 2.8) revealed that 01-REQ-031's "cancel this collector's contribution to teammates" can only be implemented if each `EffectInstance` on a teammate records which collector produced it. Consider a team with two active collectors X and Y, each having collected an InvulnPotion on different turns. Their teammate Z holds two `invuln_buff` stacks, one from X and one from Y. If X suffers a disruption, 01-REQ-031 says X's contributions to Z should be cancelled but Y's should persist. Without an origin field on `EffectInstance`, Z's two buffs are indistinguishable and the rule is unimplementable.
 **Question**: Is adding a `sourceCollectorSnakeId: SnakeId` field to `EffectInstance` the right way to support 01-REQ-031, or is there a semantic preference for a different approach?
 **Options**:
@@ -1400,6 +1412,7 @@ The rename from "interaction" to "disruption" reflects the narrower class: viole
 ### 01-REVIEW-011: `snake_moved` stager attribution — module-01-local `Agent` type — **RESOLVED**
 
 **Type**: Contradiction
+**Phase**: Design
 **Context**: Informal spec §14 defines `snake_moved: {snakeId, from, to, direction, grew: bool, stagedBy: Identity}` where `Identity` is the cross-module identity type (module-03 concept covering human users, Centaur Servers, and game participants). Module 01 must not reference module-03 types (Rule 2: 01 has no dependencies). This design uses `stagedByTeamId: TeamId | null` instead, on the reasoning that (a) module 01 can't reference `Identity`, and (b) what downstream animation/replay actually needs is team attribution (to display "Red.C moved by Red team's bot"), not the full human-or-server identity chain.
 **Question**: Is team-level attribution sufficient for `snake_moved`, or does a downstream consumer (likely module 08's team replay viewer, per informal spec §13.3) need the full `Identity` for features like "show which operator staged this move"?
 **Options**:
@@ -1437,6 +1450,7 @@ The framing of the original question ("is team-level attribution sufficient?") w
 ### 01-REVIEW-012: Game configuration parameter ranges
 
 **Type**: Gap
+**Phase**: Design
 **Context**: Several parameters in `GameConfig` (Section 3.3) have ranges stated in the informal spec's §9.3 table and also in individual requirements (e.g., `snakesPerTeam` 1–10 in 01-REQ-019, `hazardPercentage` 0–30 in §9.3). Others are implied but not stated in requirements: `maxHealth` default 100 appears in §9.3 but no requirement pins the range (the draft uses ≥1); `budgetIncrementMs` range 100–5000 appears in §9.3 but no requirement states it. `initialBudgetMs` is listed as "≥0 seconds" in §9.3 but no requirement commits to a range.
 **Question**: Should module 01's requirements section be extended with explicit range-setting requirements for every configuration parameter, so that the ranges are part of the requirements contract rather than exclusively derived from the informal spec's table?
 **Options**:
@@ -1450,6 +1464,7 @@ The framing of the original question ("is team-level attribution sufficient?") w
 ### 01-REVIEW-013: `GameState` aggregate shape not exported
 
 **Type**: Proposed Addition
+**Phase**: Design
 **Context**: The `resolveTurn` entry point in Section 3.8 takes and returns a `GameState` type, but `GameState`'s aggregate shape is not exported — the design notes that consumers interact with its components (`Board`, `SnakeState[]`, `ItemState[]`, `TeamClockState[]`) individually. Module 04 (stdb-engine) is the most likely consumer of the aggregate since it needs to serialise state to SpacetimeDB tables. If module 04 defines its own aggregate independently, there is a risk of drift between "module 01's notion of game state" and "module 04's notion of game state" especially as new fields are added.
 **Question**: Should `GameState` be an exported aggregate type (either as a plain interface or as a constructor function), or should the "components only" approach persist with module 04 building its own aggregate?
 **Options**:
@@ -1463,6 +1478,7 @@ The framing of the original question ("is team-level attribution sufficient?") w
 ### 01-REVIEW-014: "Frozen effect state" wording implied an unneeded data structure — **RESOLVED**
 
 **Type**: Ambiguity / Wording
+**Phase**: Design
 **Context**: Phase 1 requirements 01-REQ-033, 01-REQ-044, 01-REQ-044c, 01-REQ-044d, and 01-REQ-045 were originally written using "frozen" language — "all effect states shall be frozen at the start of each turn's resolution", "resolved using frozen invulnerabilityLevels", etc. This phrasing naturally suggested a concrete snapshot data structure, and Phase 2's first draft followed that lead by introducing a `FrozenEffectState` interface and a `snapshotFrozenEffects()` entry point, threading `frozen[snakeId]` reads through the collision and cancellation pseudocode. On audit during Phase 2 review, no phase between start-of-turn and Phase 9 actually writes `activeEffects`, `invulnerabilityLevel`, or `visible` — Phase 6 writes only `pendingEffects`, which is a separate list that no read consults. That meant the snapshot held a copy of data that equalled the live fields at every read site, making `FrozenEffectState` a structure whose only job was to duplicate unchanged data.
 **Question**: Can the semantic intent of 01-REQ-033 (start-of-turn values determine the turn's collision and disruption outcomes) be preserved while removing the implication that a snapshot data structure is required?
 **Options**:
@@ -1488,6 +1504,7 @@ The rewritten 01-REQ-033 explicitly allows either implementation approach ("This
 ### 01-REVIEW-015: Potion-effect stacking removed; symmetric buff/debuff state model adopted — **RESOLVED**
 
 **Type**: Design / Semantics
+**Phase**: Design
 **Context**: Earlier drafts (Phase 1 through most of Phase 2) modelled potion effects as an unbounded per-snake collection that could stack within a family: a snake could simultaneously carry multiple invulnerability or invisibility effect instances, each with its own expiry and provenance, and each collection of the same potion by a teammate layered additional instances onto the whole team. This created three follow-on problems: (1) cancellation semantics under 01-REQ-031 needed per-instance attribution (the `sourceCollectorSnakeId` field that 01-REVIEW-010 was originally framed around), (2) the invulnerability level and visibility predicates needed reducer semantics over the collection (max? any? sum clamped?) that were never cleanly specified, and (3) the debuff "collector" role was encoded asymmetrically across the two families — invulnerability had a full buff/debuff pair (the collector received `invuln_debuff`, teammates received `invuln_buff`), but invisibility used a distinct `invis_collector` marker type separate from the `invis_buff` teammates received. The asymmetry meant that a single unified effect state machine couldn't be written over both families, and every rule touching effects had to case-split on family. The user flagged all three problems in one directive and asked for a redesign that removes stacking entirely, unifies the two families behind a symmetric buff/debuff state model, and replaces per-family flat slot fields with a single collection-of-effects schema whose members carry `{family, state, expiryTurn}`.
 **Question**: What effect model best satisfies the combined constraints of (a) no stacking within a family, (b) symmetric treatment of invulnerability and invisibility, (c) clean cancellation semantics, (d) minimal schema footprint, and (e) preservation of the intended team-wide debuff-holder role where disrupting the collector cancels the team's buff?
 **Options**:
@@ -1536,6 +1553,7 @@ Option A was rejected because it retains the exact asymmetry and reducer problem
 ### 01-REVIEW-016: Invisibility-collector visibility — formal-spec-only mistake, informal spec was correct — **RESOLVED**
 
 **Type**: Mistake / Behavioural correction
+**Phase**: Design
 **Context**: An earlier draft of 01-REQ-023 specified that a snake is invisible iff it holds `invis_buff` *or* `invis_collector` — i.e. the invisibility potion collector itself was invisible along with its teammates. The user flagged this as always-intended-otherwise: the collector has always been meant to *remain visible* as the targetable weak link for the opposing team to disrupt the buff. On closer reading, the informal spec (v2.2) actually states the correct behaviour — the formal-spec error is *not* inherited from an ambiguous source. The decisive sentence is line 169, which describes MVP bot behaviour for invisibility as "Bot code naively simulates next board states with only the invisibility potion collector as the opponent." That phrasing only makes sense if the collector is still on the board as a visible target during the buff window. Consistent with this, line 157 defines `Visible` as "False when under invisibility buff effect" (not under `invis_collector`), and line 167 describes the buff as making "**all alive teammates** become invisible" — wording that separates the collector from "teammates". Line 305's scheduling rule similarly grants `invis_buff` only to teammates, while the collector receives the distinct `invis_collector` marker. What the informal spec lacks is a single sentence in plain language stating "the collector remains visible"; the correct behaviour is derivable from the definitions but never stated outright. The formal spec's first draft added a spurious `or invis_collector` disjunct to the invisibility predicate, which was a misread, not a faithful inheritance. Discovery happened during the 01-REVIEW-015 redesign audit, when unifying the two families under a symmetric buff/debuff model made the asymmetry stark: under the new model the invulnerability-family debuff-holder clearly remains vulnerable-to-body-collision (debuff = `-1` invuln level, strictly worse than teammates), and by symmetry the invisibility-family debuff-holder should remain visible (debuff = targetable, strictly worse than teammates).
 **Question**: Should the invisibility-potion collector be visible or invisible during the 3-turn duration of its team's invisibility buff?
 **Options**:

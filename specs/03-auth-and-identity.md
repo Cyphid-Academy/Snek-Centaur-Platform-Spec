@@ -157,6 +157,7 @@
 ### 03-REVIEW-001: "JWT" and "HMAC" as implementation artifacts — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The instructions prohibit requirements from referencing "implementation artifacts (table names, reducer names, specific libraries)". The informal spec §3 uses the terms JWT, HMAC, JWKS, and RSA explicitly, and Module 02's related requirements are silent on whether these terms cross the line into implementation detail. The current draft treats JWT/HMAC/JWKS/RSA as domain-level concepts only when they are required to state an invariant (e.g., "a cryptographically signed admission ticket" instead of "a JWT"), and avoids naming them in requirements. This introduces some awkwardness — e.g., 03-REQ-041 hints at RSA/HMAC distinction via parenthetical guidance but does not name the schemes.
 **Question**: Should requirements be permitted to name specific cryptographic constructions (JWT, HMAC, RSA, JWKS), or should all such naming be deferred to Design?
 **Options**:
@@ -173,6 +174,7 @@
 ### 03-REVIEW-002: "Google OAuth" vs "federated identity provider" — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The informal spec names Google specifically and repeatedly ("Google OAuth", "Google OAuth accounts"). The current draft generalizes this to "a federated identity provider integrated with Convex" to keep requirements provider-neutral. This may be over-generalization: if the platform is deliberately committing to Google as the sole provider (e.g., to keep the email address the canonical identity), that is a domain-level commitment, not an implementation detail.
 **Question**: Is Google specifically mandated, or is Google an implementation choice and the requirement is "some federated identity provider that yields a canonical email"?
 **Options**:
@@ -189,6 +191,7 @@
 ### 03-REVIEW-003: Email-as-identity stability — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 03-REQ-008 asserts that the email address identifies a human, and that two provider subjects with the same email are distinct humans. The informal spec says humans are "Identified by email address" (§3) and team membership is "authorized email addresses" (§3). But email addresses can be reassigned at providers (rare with Google Workspace, non-trivial with personal Google accounts), and a provider-issued subject is the standard stable identifier in OAuth/OIDC. The current draft privileges the subject as "uniquely identifies" while still using email for team membership lookups, which has a latent inconsistency: a human whose email changes at the provider would retain their subject but lose team memberships.
 **Question**: Is the canonical human identity the email address (simple, matches the informal spec literally) or the provider subject (robust to email change, closer to OIDC practice)? If the former, what should happen when a provider's email for a subject changes?
 **Options**:
@@ -206,6 +209,7 @@
 ### 03-REVIEW-004: Admission ticket lifetime — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 03-REQ-027 requires admission ticket lifetimes to be "bounded" and "short enough that a leaked ticket ceases to grant access within a time window commensurate with the expected duration of a game phase." The informal spec says "short expiry" for Centaur Server JWTs (§3) but does not specify lifetimes for admission tickets. Making this testable requires a concrete bound, but choosing one requires knowledge of typical game durations (which depend on turn timeout configuration in [01]) and a threat model for ticket leakage.
 **Question**: What are the specific maximum lifetimes for (a) Centaur Server credentials, (b) human admission tickets, (c) Centaur Server admission tickets, (d) spectator admission tickets? And is it acceptable for the requirement to specify an order-of-magnitude bound (e.g., "at most one hour") rather than a hard number?
 **Options**:
@@ -222,6 +226,7 @@
 ### 03-REVIEW-005: `stagedBy` attribution granularity for human participants — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The informal spec Section 14 mentions `stagedBy` capture in the `snake_moved` event. 03-REQ-032 asserts that `stagedBy` records enough information to distinguish a Centaur Server from a human and, for humans, recover the email. However, the SpacetimeDB identity associated with a human participant connection is derived from an admission ticket that carries the email, and it is not yet resolved whether the SpacetimeDB authoritative record should be (a) the connection's SpacetimeDB Identity (opaque, per-connection, does not persist across reconnections), (b) the email extracted from the admission ticket (persistent, globally meaningful), or (c) both. The informal spec is silent on this specific question. Module [02]'s 02-REQ-030 establishes that SpacetimeDB "has no concept of which human within a team is acting on which snake," which is in tension with recording human email in `stagedBy`.
 **Question**: Should `stagedBy` for human participants carry the email address (which gives SpacetimeDB some "concept of which human"), or only a team+connection-level marker with the detailed attribution living in Convex's `centaur_action_log` ([06])? Is 02-REQ-030 violated if the email appears in `stagedBy`?
 **Options**:
@@ -239,6 +244,7 @@
 ### 03-REVIEW-006: Membership changes mid-game — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 03-REQ-039 states that game authorization state is snapshot at initialization time and not retroactively changed by later membership edits. The informal spec does not address the case where a human is removed from a team mid-game or added to one during a game. This is a policy question with implications for admission-ticket issuance: if a human is removed from team T at turn 30, does their previously obtained admission ticket still work until expiry, or is the `team_permissions` snapshot in SpacetimeDB the binding source?
 **Question**: Which source of team membership governs mid-game admission:
 - the snapshot seeded into SpacetimeDB at `initialize_game` time, or
@@ -261,6 +267,7 @@
 ### 03-REVIEW-007: Asymmetric signing for two different validation contexts — **RESOLVED**
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: 03-REQ-041 elevates the implementation pattern described in the informal spec — RSA for Centaur credentials (so Convex can self-verify via JWKS) and HMAC for admission tickets (so each SpacetimeDB instance holds only the secret for its own instance) — to a requirements-level invariant about independence of compromise. This is a proposed addition, not explicit in the informal spec. The justification is defense-in-depth: if either scheme is broken, the other continues to function.
 **Question**: Is the independence-of-compromise invariant an intended architectural commitment, or is it an inference from an implementation choice that should not be locked in at the requirements level?
 **Options**:
@@ -277,6 +284,7 @@
 ### 03-REVIEW-008: Convex as sole issuer (03-REQ-037) vs healthcheck/library extension surface — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 03-REQ-037 asserts Convex is the sole issuer of all credentials. But 02-REQ-029 requires Centaur Servers to expose a healthcheck endpoint the platform calls. If that healthcheck requires no authentication, 03-REQ-037 is consistent; if it requires a credential, something must issue it. The current draft assumes healthchecks are unauthenticated on the basis that they only need to verify reachability.
 **Question**: Are Centaur Server healthcheck calls authenticated, and if so, by what credential?
 **Options**:
@@ -294,6 +302,7 @@
 ### 03-REVIEW-009: Spectator eligibility and rate-limiting — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 03-REQ-026 permits any authenticated human to obtain a spectator admission ticket, deferring eligibility rules to [09]. The informal spec §8.5 says "Any authenticated user can spectate a game in progress" but does not address private games, room-level visibility settings, or abuse (a single human requesting thousands of spectator tickets). This may be adequately covered by [09]; flagging to ensure it is not silently dropped between modules.
 **Question**: Does any spectator access restriction belong in [03] (e.g., per-human rate limit on admission ticket issuance), or is all of it [09]'s concern?
 **Options**:

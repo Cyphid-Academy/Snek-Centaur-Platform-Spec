@@ -222,6 +222,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-001: Scheduled reducer for clock expiry as an architectural commitment — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The informal spec (§10, `resolve_turn` bullet) mentions that turn resolution is "also triggered by clock expiry (scheduled reducer at max turn time as a fallback)". This sounds like an implementation detail — a scheduled reducer is a SpacetimeDB-specific mechanism. 04-REQ-032 abstracts this to "the runtime shall autonomously detect when a team's per-turn clock has reached zero... and treat that event as an implicit turn-over declaration". Whether this is correctly abstract-or-binding depends on whether alternative clock-expiry mechanisms (polling, push-from-Convex, wall-clock events on reducer entry) are acceptable substitutes.
 **Question**: Is "scheduled reducer" an architectural commitment that requirements should encode, or an implementation choice left to Phase 2 design?
 **Options**:
@@ -238,6 +239,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-002: `stagedBy` sentinel for fallback-determined moves — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 04-REQ-040 requires movement events to distinguish fallback-determined moves (where no player or Centaur Server staged a move for a snake, and [01-REQ-042]'s fallback rule applied) from staged moves. The informal spec's turn event schema (§14) defines `snake_moved` with a mandatory `stagedBy: Identity` field, which leaves no room for "no staged move was consumed". Possible resolutions: (a) make `stagedBy` nullable in the event schema and use null for fallback; (b) use a distinguished "runtime fallback" sentinel Identity value; (c) split the event into two distinct event kinds. The current draft punts to design ("the distinction shall be explicit in the event record") but the representation affects the closed event set of 04-REQ-043.
 **Question**: Which representation should the closed event set use?
 **Options**:
@@ -255,6 +257,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-003: Completeness of the closed event set — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 04-REQ-043 enumerates the closed event set as (a) movement, (b) death, (c) severing, (d) food consumption, (e) potion collection, (f) food spawning, (g) potion spawning, (h) effect application, (i) effect cancellation. This mirrors informal spec §14 closely but differs in one way: §14 does not include an explicit "severing" event kind — it folds severing into `snake_severed` as a combat event — which the current draft also uses, so that matches. However, §14 also lacks an event for **hazard damage applied to a snake that survives the hazard** (i.e., Phase 5b without Phase 5d death). Under the current draft, a snake that enters a hazard cell, loses health, and survives the turn produces no dedicated event — a replay client would have to diff health between turns to detect hazard application. This is acceptable for pure visualisation (hazard cells are visible terrain; the snake's health change is visible in its state snapshot) but blocks downstream analytics that would want an explicit hazard-damage event. Also missing: an event for the `ateLastTurn`-driven growth retention in Phase 2 (the growth bit is folded into the `snake_moved.grew` flag, which is sufficient if the growth/movement timing is well-understood by clients).
 **Question**: Is the closed event set complete for the Team Snek ruleset, or should additional event kinds be added (e.g., `hazard_damage`, explicit `starvation_tick`)?
 **Options**:
@@ -272,6 +275,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-004: Intra-phase event ordering determinism — **RESOLVED**
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 04-REQ-045 requires events within a turn to be "totally ordered... reflects the phase order and, within a phase, a deterministic intra-phase ordering derivable from the turn seed". The turn seed is well-defined by [01-REQ-060]. But within a phase, multiple snakes may produce events (e.g., three snakes all eat food in Phase 5). The order in which those events are written affects replay bit-exactness for tooling that compares event streams. The informal spec does not specify intra-phase ordering rules. Possibilities include: (a) snake ID order; (b) turn-seed-shuffled order; (c) the order in which the pipeline's internal iteration happens to process snakes (implementation-defined). Committing to a specific rule at the requirements level affects what tests can assert.
 **Question**: What intra-phase ordering rule should requirements commit to?
 **Options**:
@@ -289,6 +293,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-005: Replay-export authorisation mechanism — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 04-REQ-062 says the replay-export client is "authenticated as the Convex platform runtime" and defers the mechanism to [03] / [05]. [03]'s current draft (Sections 3.3 and 3.4) covers Centaur Server credentials and admission tickets for gameplay, but does not specify how Convex authenticates *itself* to the SpacetimeDB instance for privileged operations like initialisation (04-REQ-013) or replay export (04-REQ-061). The informal spec §10 mentions "validates admin token embedded at deploy time" for `initialize_game`. This is a cross-module gap: does the privileged Convex-to-runtime authentication use the admission-ticket HMAC secret with a distinguished role ("platform"), a separate admin token seeded at deploy time, or yet another mechanism?
 **Question**: Where should the privileged Convex-to-SpacetimeDB authentication mechanism be specified?
 **Options**:
@@ -306,6 +311,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-006: Game-end detection granularity (turn commit vs Phase 10 completion)
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 04-REQ-060 says game-end treatment applies "after a win condition has been detected in Phase 10". Phase 10 is inside the atomic turn-resolution transaction (04-REQ-037). So in practice, game-end detection happens as part of the same transaction that commits the final turn's state. The runtime then needs to transition into "no more turns" mode *after* the commit. The current wording is not explicit about whether game-end rejection of gameplay operations begins immediately on the commit or whether there is a short tail-end window. This matters for edge cases like a staged move arriving concurrent with the final turn's commit.
 **Question**: Should the transition to game-ended state be explicitly tied to the commit point of the win-detecting turn, and should in-flight operations arriving during or after commit be explicitly specified?
 **Options**:
@@ -322,6 +328,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-007: Historical record size and retention semantics during long games — **RESOLVED**
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 04-REQ-004 requires the historical record to support reconstruction of any past turn in the game. For a game with `maxTurns = 1000`, this could imply a large working set held inside a SpacetimeDB instance. The informal spec does not address retention bounds or memory pressure. Two sub-questions: (a) is unbounded historical retention part of the runtime's contract, or is there an implicit cap? (b) if the runtime has a cap, do clients lose the ability to scrub to very early turns?
 **Question**: Does the runtime commit to unbounded in-game historical retention, and if so, is this a performance concern that Phase 2 design should address?
 **Options**:
@@ -339,6 +346,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-008: Initialisation failure surfacing
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 04-REQ-017 requires the runtime to fail initialisation if board generation is infeasible per [01-REQ-061], and to surface the cause in a form Convex can relay to the room owner. The concrete form of that surfacing — error code, structured object, exception kind — is a Phase 2 concern. But requirements should at least say whether the surface is a synchronous error on the initialisation call or an asynchronous state that Convex polls for.
 **Question**: Should the initialisation operation signal failure synchronously to its caller or leave the instance in an observable failure state that the caller reads back?
 **Options**:
@@ -352,6 +360,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-009: Turn event ordering guarantees during subscription delivery
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: 04-REQ-056 says that all new state produced by a turn commit is delivered as a "single logical update". 04-REQ-045 requires events within a turn to be totally ordered. These together imply clients observe events in the specified total order, but the requirement does not explicitly assert that the *delivery order* to clients matches the *emission order*. Subscription systems sometimes deliver rows in storage order, which may not match emission order. For replay and animation correctness, clients need the guarantee that event order as observed matches event order as emitted.
 **Question**: Should the module explicitly require subscription delivery to preserve emission order for turn events within a single turn?
 **Proposed requirement**: "Subscribed clients shall receive turn events for a given turn in the order specified by 04-REQ-045. Delivery order shall match emission order."
@@ -362,6 +371,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-010: Scope of "data layer" visibility filter (RLS vs view)
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 04-REQ-047 requires visibility filtering "at the data layer" — i.e., not relying on cooperating clients. In SpacetimeDB this maps directly to Row Level Security (RLS) rules. But the requirement is deliberately phrased in abstract terms so it does not name RLS. A concern: if a future deployment uses a different storage substrate that does not support per-row filtering natively, is "data layer" the right abstraction, or should the requirement say "server-side filtering applied before delivery to a client"?
 **Question**: Is "data layer" filtering the right abstraction, or should it be restated in terms of "server-side filtering applied to query results before delivery"?
 **Options**:
@@ -374,6 +384,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-011: Interaction between `team_permissions` retention and STDB disconnect semantics
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 04-REQ-020 and 04-REQ-021 require the participant attribution record to persist for the full game lifetime, including across reconnections. SpacetimeDB connections have their own lifecycle — an Identity may be reused or may be per-connection. The requirement correctly abstracts away from this by saying "each connection identifier that has successfully registered" gets its own attribution entry, and closing a connection does not delete its entry. But this creates a subtle invariant: the runtime must treat connection identifiers as immutable historical facts even after the connection is gone. If SpacetimeDB's connection-identity semantics differ from this assumption (e.g., Identity is global and persistent across reconnections for the same client), the requirement is overspecified. If it's per-connection-ephemeral, the requirement is correct but Phase 2 needs to be careful.
 **Question**: Does SpacetimeDB's Identity semantics match the requirement's assumption (per-connection, potentially reused across reconnects for the same client, but immutable once associated with a historical row)? This is a factual question about SpacetimeDB's platform behaviour that needs verification before Phase 2.
 **Options**:
@@ -386,6 +397,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-012: Visibility of turn-0 initial food placements to opposing teams
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: Initial food items are placed during initialisation per [01-REQ-017] and recorded with spawn turn 0 per 04-REQ-007. Visibility filtering (Section 4.9) filters *snake* state, not item state. But an opponent team observing initial food placements could, in principle, infer the approximate locations of enemy starting positions (since initial food is one-per-snake placed among eligible cells). Whether this is a visibility-filter concern depends on whether starting-position information is considered private.
 **Question**: Is there any expectation that initial snake positions are hidden from opponents before turn 0 observations begin? If so, initial food placements may need to be filtered too; if not (i.e., all teams see all starting positions from turn 0 onward as a matter of game design), no additional requirement is needed.
 **Options**:
@@ -398,6 +410,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-013: Game-seed accessibility and deterministic-replay testability
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 04-REQ-069 requires the runtime to be deterministic with respect to seeded randomness. [01-REQ-059] says the per-game seed "shall not be accessible to any game client". The combination creates tension for deterministic-replay testing: if the seed is inaccessible to clients, how can a test harness verify the game log is reproducible from the seed? One answer: determinism is a property of the runtime that is verified via privileged (non-client) channels; clients don't need the seed. This is consistent with [01-REQ-059] but leaves 04-REQ-069 untestable by ordinary integration tests.
 **Question**: Should the per-game seed be accessible to the privileged replay-export client (04-REQ-061) so that a replay export can be verified for determinism downstream? This would be a narrow relaxation of [01-REQ-059] for privileged callers only.
 **Options**:
@@ -411,6 +424,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-014: Final submission pass semantics inside SpacetimeDB
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: Informal spec §6.8 describes a "final submission" by the Centaur Server bot framework "immediately before the turn deadline flushes all dirty automatic-mode snakes." That final submission happens in the Centaur Server, not in SpacetimeDB, and it stages moves via 04-REQ-024. From 04's perspective, the final submission is just a burst of staged moves arriving shortly before `declare_turn_over`. No additional requirement should be needed on the SpacetimeDB side, but I want to flag this to confirm no hidden coordination requirement exists (e.g., a "final submission barrier" reducer) that would need a home in 04.
 **Question**: Is the "final submission pass" entirely a Centaur Server concern, with no runtime-side coordination, or does the runtime need an explicit requirement for handling a pre-declaration burst of staged moves?
 **Options**:
@@ -423,6 +437,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-015: Provenance of the per-instance admission-ticket validation secret
 
 **Type**: Gap (raised 2026-04-10 on reading [05] Phase 1 draft)
+**Phase**: Requirements
 **Context**: [05-REQ-032] commits Convex to supplying "the instance's unique admission-ticket validation secret" as an explicit parameter to the runtime's privileged initialisation operation. [03-REQ-022] describes the secret as "provisioned to that instance at init time", which is consistent with the [05] commitment but does not nail down the direction (Convex-generates-and-passes vs runtime-generates-and-returns). The current draft of 04 does not have an explicit requirement stating that the secret arrives via the init-time parameter set of Section 4.3. This is a gap on the 04 side, not a conflict — but leaving it implicit means a Phase 2 designer could choose a different direction that would break [05-REQ-032]'s assumption.
 **Question**: Should 04 add an explicit requirement discharging [05-REQ-032] — i.e., the runtime shall accept the admission-ticket validation secret as an init-time parameter and shall treat that secret as the sole trust anchor for admission-ticket validation per 4.4?
 **Options**:
@@ -436,6 +451,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-016: Admission-ticket validation secret confidentiality on the runtime side
 
 **Type**: Proposed Addition (raised 2026-04-10 on reading [05] Phase 1 draft)
+**Phase**: Requirements
 **Context**: [05-REVIEW-001] asks how Convex stores its copy of the per-instance admission-ticket validation secret. Whatever is decided there, the runtime holds the other copy, and 04 currently has no requirement asserting that the secret is not exposed via any read query, subscription, or replay export. Without such a requirement, a Phase 2 designer could inadvertently include the secret in a client-visible table or in the exported historical record. The secret must remain confidential to the runtime's admission path and must not appear in the replay export ([05-REQ-040]), as doing so would leak a game-instance credential into persistent platform storage indefinitely.
 **Question**: Should a negative requirement be added stating that the admission-ticket validation secret is not exposed to any subscription, query, or replay-export read?
 **Proposed requirement**: "The runtime shall hold the admission-ticket validation secret ([03-REQ-022]) solely for the purpose of admission-ticket validation per Section 4.4. The secret shall not appear in any client-visible query result, subscription update, or replay-export read; in particular, the historical record delivered via replay export per 04-REQ-061 shall not contain the secret."
@@ -446,6 +462,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 ### 04-REVIEW-017: Symmetric cross-runtime isolation invariant
 
 **Type**: Proposed Addition (raised 2026-04-10 on reading [06] Phase 1 draft)
+**Phase**: Requirements
 **Context**: [06-REQ-045] and [06-REQ-046] assert, from the Centaur-state side, that SpacetimeDB does not read from or write to Centaur state and that Centaur state does not expose any affordance for writing to STDB-owned state. These negatives are consistent with [02]'s topology but are currently only stated in [06]. 04 has a broader "no external consultation during gameplay" invariant ([04-REQ-068], which I should double-check), but no explicit symmetric negative about not consulting Convex (platform or Centaur) at all. Adding the symmetric negative on the 04 side would make the boundary belt-and-braces and would prevent a Phase 2 designer from, say, reaching into Convex during turn resolution to read a bot parameter.
 **Question**: Is [04-REQ-068] (or whichever 04 requirement most closely covers this) sufficient, or should a dedicated negative requirement name Convex explicitly and cite [06-REQ-045/046]?
 **Options**:

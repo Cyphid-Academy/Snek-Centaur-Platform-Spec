@@ -184,6 +184,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-001: Heuristic defaults scoped to team vs Centaur Server
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: Informal spec §6.4 says "Each Centaur Server maintains a global heuristic configuration". §7.1 and §7.2 say these tables are "stored in Convex per team". The current draft treats the scoping as per-team on the basis that [02-REQ-005] mandates a 1:1 relationship between Centaur Teams and Centaur Servers, so the two framings are extensionally equivalent.
 **Question**: Is the extensional equivalence sufficient, or is there a case (e.g., server re-registration, server replacement, server rename) where "per server" and "per team" would produce different outcomes that should be resolved explicitly?
 **Options**:
@@ -196,6 +197,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-002: Cross-team read visibility of heuristic defaults and bot parameters
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: The informal spec does not explicitly state whether one team's heuristic defaults or bot parameters are visible to members of other teams. [06-REQ-032] defaults to strict team-scoping (no cross-team reads) on the basis that these values are competitive information and that no use case motivating cross-team visibility is identified in the informal spec.
 **Question**: Confirm strict team-scoping, or identify cross-team read affordances (e.g., for a platform administrator, for post-game analysis by opponents, for leaderboard purposes) that should be added.
 **Options**:
@@ -208,6 +210,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-003: Who writes non-compute action log entries
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: The informal spec lists action log entries including `move_staged`, `snake_selected`, `manual_toggled`, `drive_added`, etc., but does not explicitly distinguish which events are written by the Centaur Server runtime and which are written by the human operator client that originates them. [06-REQ-037] reserves the two event categories whose payloads cannot plausibly be produced by a human client (computed display state snapshots and bot-originated move staging) to the Centaur Server, and leaves the rest open. In practice this likely means the client that initiated the action is the writer, but this is not the only plausible design — an alternative is that all action log writes are brokered through the Centaur Server so that the bot framework and UI share a single write path.
 **Question**: Which entity writes user-originated action log entries (selection changes, Drive edits, manual-mode toggles, temperature changes, operator-mode changes)? The human operator's browser against Convex directly, or the Centaur Server on behalf of the operator?
 **Options**:
@@ -221,6 +224,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-004: Action log delivery guarantees for sub-turn replay fidelity
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [06-REQ-035] promises that the action log is sufficient to reconstruct the team's experience at any timestamp. Sub-turn replay fidelity depends on the log being a faithful record of what actually happened — missing entries would produce ghosting in the replay where a snake's state jumps without explanation. The informal spec does not specify delivery guarantees for action log writes, nor what should happen if a write fails (e.g., network partition between an operator's browser and Convex during a turn).
 **Question**: What delivery guarantees does the subsystem promise for action log writes, and what is the observable behaviour when a write fails?
 **Options**:
@@ -234,6 +238,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-005: Temperature override persistence across turns and deselection
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: Informal spec §6.4 explicitly states "Drive assignments and weight overrides persist across turns (they are not reset when the operator deselects the snake)", and the draft's [06-REQ-016] preserves this. The informal spec is silent on whether the per-snake temperature override has the same persistence semantics. The draft treats it as symmetric with weight overrides (persistent).
 **Question**: Is per-snake temperature override intended to persist across turns and across deselection, matching Drive/weight override semantics?
 **Options**:
@@ -246,6 +251,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-006: Selection-state lifetime at game end
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [06-REQ-040] retains all game-scoped state, including selection state, for the lifetime of the game record. This means a finished game's last selection state is visible forever. The team replay viewer ([08]) almost certainly wants this to render historical selection shadows. But it is worth confirming that permanently retaining "which operator had which snake selected at game end" is intended, as opposed to clearing selection state on game finalisation while retaining the action log.
 **Question**: Is retaining the terminal selection record intentional, or should selection state be cleared at game end with historical selection visible only through the action log?
 **Options**:
@@ -258,6 +264,7 @@ All other event categories may be written by either the Centaur Server or a huma
 ### 06-REVIEW-007: Informal spec v2.1/v2.2 filename drift
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: `SPEC-INSTRUCTIONS.md` references `team-snek-centaur-platform-spec-v2_1.md` as the informal source of truth, but the file in the project root is `team-snek-centaur-platform-spec-v2.2.md`. This is the same issue flagged in 02-REVIEW-001. Requirements in this module were extracted from v2.2 on the same assumption (v2.2 supersedes v2.1). Flagging here for consistency; resolution should be shared with 02-REVIEW-001.
 **Question**: Confirm v2.2 is canonical. See 02-REVIEW-001.
 **Informal spec reference**: N/A (meta).

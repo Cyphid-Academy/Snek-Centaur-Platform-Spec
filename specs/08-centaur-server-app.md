@@ -249,6 +249,7 @@
 ### 08-REVIEW-001: Role gating of heuristic configuration and bot parameters
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: Informal spec §7.1 and §7.2 both say the heuristic config and bot parameters are "editable by any team member". §8.2 separately says team identity, server registration, and membership are captain-only — an explicit distinction that implies team-internal competitive configuration is deliberately not captain-only. [06-REQ-008] and [06-REQ-012] echo this by requiring only that the caller be a team member. This is a plausible reading but is surprising: a new operator could, immediately upon being added to the team, change the team's global heuristic defaults in ways that affect subsequent games for everyone. No mechanism in the current draft provides a safeguard.
 **Question**: Should the heuristic configuration page and the bot parameters page be gated on a role (captain, timekeeper) rather than general team membership?
 **Options**:
@@ -263,6 +264,7 @@
 ### 08-REVIEW-002: Mid-game effect of default-operator-mode edits
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 08-REQ-022 says the default operator mode affects only future games, since the running game's mode is owned by the session's in-memory state and toggled by the timekeeper. But [06-REQ-011] treats the default operator mode as a team-scoped record and [06-REQ-009] says team-scoped edits do not retroactively affect in-progress games' portfolio state — that rule addresses heuristic config, not the operator mode. A strict reading of [06] leaves the mid-game behaviour of a default-operator-mode edit undefined.
 **Question**: Does editing the default operator mode during a game affect the running game's current mode, the next game only, or neither (treated as a no-op until the next game starts)?
 **Options**:
@@ -276,6 +278,7 @@
 ### 08-REVIEW-003: Game history visibility scope
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 08-REQ-024 and 08-REQ-027 currently restrict the game history list to games the authenticated human participated in. Informal spec §7.3 says "completed games the logged-in user participated in", which supports this. But a coach or captain may want to review all of the team's past games regardless of personal participation. The informal spec does not contemplate this and the draft takes the narrow reading.
 **Question**: Should the game history list show (a) only games the current human participated in, (b) all of the team's games, or (c) both with a toggle?
 **Options**:
@@ -289,6 +292,7 @@
 ### 08-REVIEW-004: Presence state store
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 08-REQ-032 and 08-REQ-035 require a presence display of other connected team operators in the header. Neither [05] nor [06] defines a presence state field, and [06-REQ-018]'s selection record encodes only the current selector of a snake, not the set of connected operators who are unselected. A plausible implementation is that the Centaur Server runtime itself holds presence state and serves it over its own subscription (outside Convex), but no module currently defines this contract. See 08-REQ-003 which already acknowledges the Centaur Server as a source for in-memory bot-framework state the browser reads directly; presence likely rides the same channel. Requires explicit specification somewhere.
 **Question**: Where does operator presence state live, and which module owns its specification?
 **Options**:
@@ -302,6 +306,7 @@
 ### 08-REVIEW-005: Drive dropdown ordinal collisions
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [06-REQ-007] says each Drive type has an ordinal dropdown position, and 08-REQ-052 orders the dropdown by that ordinal. Nothing in either module prevents two Drive types from having the same ordinal. In that case the ordering is underspecified; tiebreak behaviour could be alphabetic, insertion order, or stable-by-id. This matters because operators rely on the dropdown position as muscle-memory shorthand.
 **Question**: What is the tiebreak when two Drive types have the same ordinal?
 **Options**:
@@ -315,6 +320,7 @@
 ### 08-REVIEW-006: Tab cycle deterministic tie-break in targeting
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 08-REQ-054 orders Tab-cycled targeting candidates by A*-distance from the selected snake's head. Two candidate targets may be equidistant; the order they are visited by Tab is then undefined. As with the dropdown, this matters because operators come to rely on specific sequences during rapid play.
 **Question**: What is the tiebreak when two candidate targets have equal A* distance?
 **Options**:
@@ -328,6 +334,7 @@
 ### 08-REVIEW-007: Timekeeper affordance availability when no timekeeper is assigned
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [05-REQ-011] says a team has at most one timekeeper at any time, implying the role may be absent. 08-REQ-065 and 08-REQ-067 say only the current timekeeper sees and can invoke the affordances. If no timekeeper is assigned, no member of the team can submit the turn in Centaur mode, and the game can only end by clock expiry. This is possibly intentional (a team that fails to assign a timekeeper is accepting that consequence) but is worth confirming.
 **Question**: When a team has no timekeeper, who — if anyone — can invoke the mode toggle and turn-submit affordances?
 **Options**:
@@ -342,6 +349,7 @@
 ### 08-REVIEW-008: Replay-mode selection and Centaur state
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 08-REQ-073 asserts that replay-mode selection is a local UI concept that does not issue any Centaur state mutation. [06-REQ-018] defines the selection record as a per-(game, snake) Convex row. The replay viewer reads, but does not write, Centaur state. This is straightforward for the "invisible observer" reading but leaves one ambiguity: if two humans open replays of the same game simultaneously and each inspects a different snake, both can be inspecting different snakes without conflict (since neither writes). But if the team replay viewer in the future is extended to support shared replay sessions where multiple people see each other's positions, that extension would require either a new replay-selection record or a reuse of the selection record with a "replay selector" flag. The current draft does not contemplate shared replay sessions; this is a forward-compatibility concern.
 **Question**: Confirm that replay-mode selection is purely client-local and does not require any additional Convex state.
 **Options**:
@@ -354,6 +362,7 @@
 ### 08-REVIEW-009: Scope of application customisation
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: [02-REQ-032(c)] permits "optional customization of the operator web application" as one of three extension points. Neither [02] nor [08]'s draft specifies what "customisation" means concretely: can a team replace entire pages? Inject arbitrary UI? Swap out the move interface? Override the board renderer? The boundary matters because aggressive customisation could present the operator with affordances inconsistent with [06]'s invariants even though those invariants remain enforced server-side. That is acceptable from a correctness standpoint per [02-REQ-033] / 08-REQ-080, but could be a poor user experience and might be worth bounding.
 **Question**: What is the intended scope of customisation — theming only, component swapping, or full page replacement?
 **Options**:
@@ -367,6 +376,7 @@
 ### 08-REVIEW-010: Speed-control set in team replay viewer
 
 **Type**: Proposed Addition
+**Phase**: Requirements
 **Context**: The informal spec §13.3 mentions that the team replay viewer has "play/pause, and speed controls", without enumerating a speed set. Informal spec §8.6 enumerates `{0.5×, 1×, 2×, 4×}` for the platform replay viewer ([09]). The draft of [08] leaves the specific speed set to design, but if consistency across the two replay viewers matters, it should be pinned now as a cross-module contract.
 **Question**: Should [08]'s team replay viewer use the same speed set as [09]'s platform replay viewer, and if so, pin it now?
 **Options**:
@@ -380,6 +390,7 @@
 ### 08-REVIEW-011: Interaction between automatic-mode timer and manual overrides mid-turn
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 08-REQ-062 says the Automatic-mode timer proceeds independently of operator UI interactions. But [07-REQ-046] says manual-mode snakes are never auto-staged. If during an Automatic-mode turn an operator flips several snakes to manual mode and stages human moves for them, and then the Automatic timer fires, is the team's turn declared over with those human moves in place and the remaining automatic snakes' latest bot-staged moves? Informal spec §7.5 implies yes ("submitting all currently staged moves"). The requirements currently omit this detail.
 **Question**: On Automatic-mode timer expiry, does the turn-over declaration submit exactly the current staged moves for all owned snakes (mix of bot and human staging), or does it require all automatic-mode snakes to have a bot-staged move before firing?
 **Options**:
@@ -393,6 +404,7 @@
 ### 08-REVIEW-012: Informal spec filename drift
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: Consistent with 02-REVIEW-001, 06-REVIEW-007, 07-REVIEW-010. Requirements in this module were extracted from `team-snek-centaur-platform-spec-v2.2.md`. Resolution is shared with the prior reviews.
 **Question**: Confirm v2.2 is canonical. See 02-REVIEW-001.
 **Informal spec reference**: N/A (meta).

@@ -210,6 +210,7 @@
 ### 05-REVIEW-001: Convex retention of admission-ticket validation secret
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: [03-REQ-022] says each SpacetimeDB instance's admission-ticket validation secret is unique and provisioned to that instance at init time. [03-REQ-019] says Convex issues admission tickets, which implies Convex must also hold the secret in order to sign them for the instance to verify. [03-REQ-043] says credential material must only be transmitted over trusted channels to its intended holder. 05-REQ-034 elevates this to a requirement that Convex retains its copy of the secret for the game's duration and drops it at teardown. The informal spec (§2, §11 `games.hmacSecret`) stores the secret in the `games` table, implying persistent Convex storage keyed by game id.
 **Question**: Is persistent storage of the admission secret in the `games` row (a) the intended design, (b) acceptable given the threat model, and (c) expected to be dropped at teardown or retained indefinitely in the game record for audit purposes?
 **Options**:
@@ -223,6 +224,7 @@
 ### 05-REVIEW-002: Room deletion and game history preservation
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 05-REQ-021 asserts that a room's lifetime is independent of its games and persists until explicit deletion, but neither the informal spec nor the draft specifies what happens to historical games, replays, and action logs when a room is deleted. Deleting the room but preserving its games leaves dangling foreign references; cascading the deletion loses historical attribution that [03-REQ-047] requires to remain stable.
 **Question**: What is the policy for room deletion?
 **Options**:
@@ -237,6 +239,7 @@
 ### 05-REVIEW-003: Roster freeze across tournament rounds
 
 **Type**: Gap (inherited)
+**Phase**: Requirements
 **Context**: [03-REVIEW-006] explicitly flagged this sub-question against Module 05 as the owner of tournament mode lifecycle. The question is whether a tournament's overall lifetime should freeze rosters across all its rounds (including during the inter-round interlude when no individual round is `playing`) or whether rosters unfreeze between rounds. 05-REQ-064 currently inherits the per-round freeze from [03-REQ-046] and leaves the cross-round case unresolved.
 **Question**: Should roster mutations be permitted during the inter-round interlude of a tournament?
 **Options**:
@@ -250,6 +253,7 @@
 ### 05-REVIEW-004: Captain authorization scope bounding of API keys
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 05-REQ-047 (tracing [03-REQ-035]) says an API key's authorization scope is bounded by the creator's current UI authorization scope, and shrinks live with the creator's current scope. This creates a live-dependency between API key enforcement and team-membership state: a Captain who creates an API key and then is demoted would have their API key immediately lose Captain-level privileges. This is arguably correct but has surprising behaviour: organisations often want API keys to represent a stable capability independent of the human who created them. It also complicates the enforcement story because Convex must re-resolve the creator's scope on every request.
 **Question**: Which enforcement model applies to API keys?
 **Options**:
@@ -263,6 +267,7 @@
 ### 05-REVIEW-005: Who sees game_start — timing vs who knows the config
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 05-REQ-054 says a `game_start` webhook fires when a game transitions to `playing`, which is after provisioning and initialization have completed. But the webhook payload includes the full game configuration snapshot, which is determined at game-record creation ([05-REQ-024]) — an earlier moment. Subscribers who want to act *before* the game starts (e.g., to pre-stage a spectator client) cannot: `game_start` fires after the fact. The informal spec §12 does not distinguish these moments.
 **Question**: Should there be a `game_created` or `game_will_start` webhook event in addition to `game_start`?
 **Options**:
@@ -276,6 +281,7 @@
 ### 05-REVIEW-006: Final scores shape and domain meaning
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 05-REQ-038 and 05-REQ-055 refer to "final scores" as the terminal state of a game, and the informal spec §11 shapes it as `{teamId: number}`. But [01] does not yet define what a "score" is in the game rules — [01]'s win condition language is "last team standing" or "max turns reached", neither of which obviously produces a numeric score per team. The shape is carried over from the informal spec without a corresponding requirement in Module 01.
 **Question**: Is a numeric per-team score a domain concept owned by [01], or a derived value computed at game end? If derived, by which runtime (SpacetimeDB or Convex) and by what formula?
 **Options**:
@@ -289,6 +295,7 @@
 ### 05-REVIEW-007: "Ready check" semantics and where readiness lives
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 05-REQ-031 mentions "marked themselves ready" but does not specify where team readiness is stored, how it is cleared, or which actor within a team can mark ready. Informal spec §9.4 step 3 says "Each Centaur Team's Captain (or any operator) marks their team ready." This is a platform-side state that lives somewhere, and since it governs the game-start gate, it is squarely in Module 05's territory — but the requirement is currently vague.
 **Question**: Where does team readiness live (room record? team record? ephemeral in-memory? transient game record?) and what clears it?
 **Options**:
@@ -302,6 +309,7 @@
 ### 05-REVIEW-008: Non-tournament auto-create — who owns the room's "current game" invariant
 
 **Type**: Ambiguity
+**Phase**: Requirements
 **Context**: 05-REQ-016 and 05-REQ-039 together imply that a room always has at most one `not-started` or `playing` game at a time (its `currentGameId`), and that the next game is auto-created immediately on the previous one finishing. If the auto-create fires while administrative actors are mid-edit of the room's parameters, the new game might inherit stale parameters or race against the edit. The informal spec is silent on the atomicity of auto-create vs room parameter edits.
 **Question**: How does auto-create interact with concurrent room parameter edits?
 **Options**:
@@ -315,6 +323,7 @@
 ### 05-REVIEW-009: Healthcheck failure during game-start orchestration
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 05-REQ-036 asserts that if a participating team's Centaur Server is unhealthy at game-start time, Convex does not transition the game to `playing`, but leaves the specific recovery action to Design. This is an under-specified requirement because it affords multiple mutually incompatible interpretations (retry indefinitely, abort the game, surface to operator, substitute a stub). Requirements-level clarity on the intended behaviour would improve testability.
 **Question**: What is the intended recovery action?
 **Options**:
@@ -328,6 +337,7 @@
 ### 05-REVIEW-011: Centaur Team deletion — whether historical references should soft-delete or be allowed at all
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: 05-REQ-015a was added late in drafting after noticing that [06-REQ-041] names [05] as the owner of team-deletion cascade mechanics. The current draft permits deletion (when the team has no `playing` game) and cascades team-scoped live state while preserving historical game records. This has the same shape of concern as 05-REVIEW-002 (room deletion): deleting a team loses the ability to display that team in leaderboards and profile pages, even though the historical attribution pointer in old games still resolves via the snapshot. An alternative is to disallow deletion entirely in favour of an archive flag.
 **Question**: What is the intended lifecycle for Centaur Teams — delete-with-cascade, archive-only, or some hybrid?
 **Options**:
@@ -341,6 +351,7 @@
 ### 05-REVIEW-010: Transitive dependency on Module 01 exported interfaces
 
 **Type**: Gap
+**Phase**: Requirements
 **Context**: Several requirements in this module reference domain concepts owned by [01] — board size enum, "turn", snake count, win conditions, scores — via transitive dependency through [02]. Per Context Management Rule 2, during Phase 1 the agent loads full direct dependencies and Exported Interfaces of transitive dependencies. [01] has only Phase 1 drafted, so no Exported Interfaces exist yet. The current draft references [01] requirement IDs and domain concepts informally. When [01] reaches Phase 2, its exported type vocabulary may not line up exactly with the informal references used here, necessitating a reconciliation pass.
 **Question**: None — this is a meta-flag for the human to revisit after [01] Phase 2 completes.
 **Informal spec reference**: N/A (meta).
