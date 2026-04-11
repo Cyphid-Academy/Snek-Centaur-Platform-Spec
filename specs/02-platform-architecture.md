@@ -157,9 +157,9 @@ The platform is composed of exactly three runtime kinds, each with a distinct li
 ┌─────────────────────┐  ┌───────────────────────┐  ┌───────────────────────┐
 │ SpacetimeDB Instance│  │ Centaur Server         │  │ Game Platform Server  │
 │ (per started game)  │  │ (per team)             │  │                       │
-│                     │  │                        │  │ Serves Game Platform  │
-│ Transient game state│  │ Bot computation        │  │   Client (Svelte app) │
-│ Authoritative rules │  │ Serves Operator Client │  │                       │
+│                     │  │                        │  │ Static / SSR serving  │
+│ Transient game state│  │ Bot computation        │  │ Game Platform Client  │
+│ Authoritative rules │  │ Serves Operator Client │  │   (SvelteKit app)     │
 │ Append-only log     │  └───────────┬────────────┘  └───────────┬───────────┘
 └─────────────────────┘        serves│                     serves│
                           ┌──────────▼──────────┐    ┌───────────▼───────────┐
@@ -174,7 +174,6 @@ The platform is composed of exactly three runtime kinds, each with a distinct li
 | SpacetimeDB | Convex | HTTP (discrete) | Game-end notification, replay export |
 | Centaur Server | Convex | Convex client | Centaur subsystem state (subscribe + write) |
 | Centaur Server | SpacetimeDB | WebSocket | Game state subscription, move staging |
-| Game Platform Server | Convex | Convex client | Platform state (rooms, games, config) |
 | Operator Client | SpacetimeDB | WebSocket | Game state subscription, move staging, turn declaration |
 | Operator Client | Convex | Convex client | Centaur subsystem state (selection, drives, action log) |
 | Game Platform Client | SpacetimeDB | WebSocket (read-only) | Game state subscription (spectating) |
@@ -372,7 +371,9 @@ Operator Browser
 
 The SpacetimeDB connection provides low-latency game state and real-time move staging. The Convex connection provides Centaur subsystem state (which is not in SpacetimeDB) and supports the operator coordination features (selection, Drive management, action logging). Both connections authenticate independently: the SpacetimeDB connection uses an HMAC-signed admission ticket ([03]), and the Convex connection uses the operator's Google OAuth session.
 
-**Game Platform Client dual-connection model** (02-REQ-041). The Game Platform Client is a Svelte web application served by the Game Platform Server — parallel to how the Operator Client is served by the Centaur Server. The Game Platform Client handles all cross-team and platform-level UI, including live spectating. When spectating a game, the Game Platform Client maintains two simultaneous connections:
+**Game Platform Client dual-connection model** (02-REQ-041). The Game Platform Client is a SvelteKit web application served by the Game Platform Server (static assets, with optional SSR for indexable pages such as profiles and leaderboards). The Game Platform Server itself does not maintain a Convex client connection — all reactive Convex subscriptions live in the Game Platform Client (browser). This parallels the Centaur Server / Operator Client split, with one difference: the Centaur Server maintains its own server-side Convex client because bots need reactive access to Centaur subsystem state, whereas the Game Platform Server has no such need.
+
+The Game Platform Client handles all cross-team and platform-level UI, including live spectating. When spectating a game, the Game Platform Client maintains two simultaneous connections:
 
 ```
 Game Platform Client (spectating)
@@ -395,7 +396,7 @@ Satisfies 02-REQ-043 through 02-REQ-049.
 
 | Server | Client | Technology | Scope |
 |--------|--------|------------|-------|
-| **Game Platform Server** (platform infrastructure, e.g. Vercel/Cloudflare) | **Game Platform Client** | Svelte ([09]) | Cross-team: home, team identity management, Centaur Server registration, member management, timekeeper assignment, room browsing/creation, room lobby/game config, live spectating, platform replay viewer, player profiles, team profiles, leaderboards |
+| **Game Platform Server** (platform infrastructure, e.g. Vercel/Cloudflare; static + optional SSR) | **Game Platform Client** | SvelteKit ([09]) | Cross-team: home, team identity management, Centaur Server registration, member management, timekeeper assignment, room browsing/creation, room lobby/game config, live spectating, platform replay viewer, player profiles, team profiles, leaderboards |
 | **Centaur Server** (per team) | **Operator Client** | Determined by library reference app ([08]) | Team-internal: heuristic config, bot parameter config, live operator interface, team-perspective replay viewer with sub-turn timeline |
 
 **Negative boundary constraints**. The following are architectural constraints, not just UI omissions — they reflect the data ownership model:
