@@ -481,7 +481,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 ---
 
-### 04-REVIEW-017: Symmetric cross-runtime isolation invariant
+### 04-REVIEW-017: Symmetric cross-runtime isolation invariant — **RESOLVED**
 
 **Type**: Proposed Addition (raised 2026-04-10 on reading [06] Phase 1 draft)
 **Phase**: Requirements
@@ -492,3 +492,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 - B: Add an explicit 04 requirement mirroring [06-REQ-045/046]: the runtime shall not read from or write to Convex during gameplay; the sole permitted runtime↔Convex interactions are (i) init-time parameter delivery per [05-REQ-032] and (ii) end-of-game replay export per [05-REQ-040] / 04-REQ-061.
 - C: Same as B but also explicitly carve out the Convex-driven teardown signal (if any is needed — depends on how game-end detection lands per 04-REVIEW-006).
 **Informal spec reference**: §2 (topology); [06-REQ-045], [06-REQ-046].
+
+**Decision**: Option A — rely on [04-REQ-068]'s existing "no external systems during gameplay" invariant; no dedicated negative requirement naming Convex is needed.
+**Rationale**: [04-REQ-068] already prohibits the runtime from consulting "any external system (Convex, Centaur Server, or other) during gameplay" — Convex is explicitly named in the requirement text, so the symmetric isolation concern is already covered on the 04 side. The negatives in [06-REQ-045] and [06-REQ-046] are consistent with and complementary to this invariant; restating them in 04 would be redundant rather than additive. If a future change weakens [04-REQ-068], the isolation concern should be revisited at that point.
+**Affected requirements/design elements**: None — [04-REQ-068] stands as drafted.
