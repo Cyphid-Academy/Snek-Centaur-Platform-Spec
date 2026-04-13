@@ -28,3 +28,7 @@ args = "echo \"Spec-only repository — no application to run.\""
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
