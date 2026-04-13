@@ -132,7 +132,7 @@
 
 **02-REQ-040**: The operator interface shall be served to a team's human members from the Snek Centaur Server that the team has nominated.
 
-**02-REQ-041**: Human spectators shall connect directly to a game's SpacetimeDB instance via WebSocket using a read-only admission ticket ([03]). Spectator connections shall be subject to invisibility filtering ([02-REQ-010]) on the same terms as opponent team connections.
+**02-REQ-041**: Human spectators shall connect directly to a game's SpacetimeDB instance via WebSocket using a read-only admission ticket ([03]). Spectator connections shall be subject to invisibility filtering ([02-REQ-010]): because spectators are affiliated with no team, they are treated as opponents of every team for RLS purposes and shall not see any team's invisible snakes.
 
 ---
 
@@ -932,7 +932,7 @@ export interface UnifiedWebApplicationScope {
 
 ---
 
-### 02-REVIEW-006: Replay data retrieval pattern
+### 02-REVIEW-006: Replay data retrieval pattern — **RESOLVED**
 
 **Type**: Ambiguity
 **Phase**: Design
@@ -944,7 +944,13 @@ export interface UnifiedWebApplicationScope {
 - C: Commit to runtime-push (SpacetimeDB pushes the log to a Convex HTTP action in the game-end notification).
 **Informal spec reference**: §9.4 step 8, §13.1.
 
-### 02-REVIEW-007: Spectator visibility — no-team vs. opponent-equivalent
+**Decision**: A — leave the retrieval pattern to [04]/[05]; module 02 specifies only that retrieval and persistence must complete before teardown.
+**Rationale**: The existing design text (§2.14) and 02-REQ-022 already defer the retrieval pattern to downstream modules, stating the choice is "at [04]/[05]'s discretion per the requirement." Committing to a specific pattern at the architectural level would over-constrain [04] and [05] without adding value — the correctness invariant that matters to module 02 is that the complete game log is persisted before instance teardown (02-REQ-021), not the mechanism by which it is obtained. Both Convex-pull and runtime-push are viable, and the choice depends on [04]'s notification design and [05]'s action topology, which are not yet finalised. This resolution confirms the current draft stance.
+**Affected requirements/design elements**: None — 02-REQ-022 and the §2.14 design text already align with this decision and require no changes.
+
+---
+
+### 02-REVIEW-007: Spectator visibility — no-team vs. opponent-equivalent — **RESOLVED**
 
 **Type**: Ambiguity
 **Phase**: Design
@@ -954,3 +960,7 @@ export interface UnifiedWebApplicationScope {
 - A: Spectators see all snakes (union). Invisible snakes are hidden only from opponent *team* connections, not from unaffiliated spectators.
 - B: Spectators see no invisible snakes (intersection). They are treated as opponents of every team for RLS purposes.
 **Informal spec reference**: §8.5 ("Spectators connect with a read-only admission ticket").
+
+**Decision**: B — spectators see no invisible snakes (intersection semantics). Spectators are treated as opponents of every team for RLS purposes.
+**Rationale**: Spectators belong to no team. The RLS invisibility rule hides a team's invisible snakes from all connections that are not affiliated with that team. Since a spectator is not affiliated with any team, they are opponents of every team, and every team's invisible snakes are hidden from them. This is the natural reading of 02-REQ-041's "on the same terms as opponent team connections" and produces the most conservative, leak-free visibility policy. The union interpretation (Option A) would grant spectators strictly *more* visibility than any team player — a counterintuitive privilege that would undermine the strategic value of invisibility. The intersection interpretation preserves the competitive integrity of the invisibility mechanic for all observers.
+**Affected requirements/design elements**: 02-REQ-041 tightened to explicitly state that spectators see no invisible snakes of any team, removing the ambiguity of the "same terms as opponent team connections" phrasing. §2.18 spectator connection model description already contains explicit language ("spectators cannot see invisible snakes of any team") and requires no changes.
