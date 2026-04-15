@@ -232,6 +232,42 @@ Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disrupti
 
 ---
 
+### 1.11 Game Configuration Parameter Ranges
+
+**01-REQ-063 (Board size range)**: `boardSize` shall be one of `Small`, `Medium`, `Large`, or `Giant` as defined by the `BoardSize` enum (01-REQ-003). No additional constraint beyond the type is required.
+
+**01-REQ-064 (Snakes per team range)**: `snakesPerTeam` shall be an integer in the range 1–10, default 5 (consistent with 01-REQ-019).
+
+**01-REQ-065 (Max health range)**: `maxHealth` shall be an integer in the range 1–500, default 100. The lower bound ensures snakes can take at least one hit; the upper bound prevents degenerate immortality configurations.
+
+**01-REQ-066 (Max turns range)**: `maxTurns` shall be 0 (disabled, per 01-REQ-058) or an integer in the range 1–1000, default 100. The upper bound prevents excessively long games.
+
+**01-REQ-067 (Hazard percentage range)**: `hazardPercentage` shall be an integer in the range 0–30, default 0 (informal spec §9.3).
+
+**01-REQ-068 (Hazard damage range)**: `hazardDamage` shall be an integer in the range 1–100, default 15 (informal spec §9.3).
+
+**01-REQ-069 (Fertile ground density range)**: `fertileGround.density` shall be an integer in the range 1–90, default 30 (informal spec §9.3). Only meaningful when `fertileGround.enabled` is true.
+
+**01-REQ-070 (Fertile ground clustering range)**: `fertileGround.clustering` shall be an integer in the range 1–20, default 10 (informal spec §9.3). Only meaningful when `fertileGround.enabled` is true.
+
+**01-REQ-071 (Food spawn rate range)**: `food.spawnRate` shall be a number in the range 0–5, default 0.5 (informal spec §9.3).
+
+**01-REQ-072 (Invulnerability potion spawn rate range)**: `invulnPotions.spawnRate` shall be a number in the range 0.01–0.2, default 0.15 (informal spec §9.3). Only meaningful when `invulnPotions.enabled` is true.
+
+**01-REQ-073 (Invisibility potion spawn rate range)**: `invisPotions.spawnRate` shall be a number in the range 0.01–0.2, default 0.1 (informal spec §9.3). Only meaningful when `invisPotions.enabled` is true.
+
+**01-REQ-074 (Initial time budget range)**: `clock.initialBudgetMs` shall be an integer in the range 0–600000 (0–10 minutes), default 60000 (informal spec §9.3). Zero means no initial budget.
+
+**01-REQ-075 (Budget increment range)**: `clock.budgetIncrementMs` shall be an integer in the range 100–5000, default 500 (informal spec §9.3).
+
+**01-REQ-076 (First turn time range)**: `clock.firstTurnTimeMs` shall be an integer in the range 1000–300000, default 60000. The lower bound of 1000ms is higher than `maxTurnTimeMs`'s 100ms floor because the first turn involves initial orientation and should not be blitz-constrained.
+
+**01-REQ-077 (Max turn time range)**: `clock.maxTurnTimeMs` shall be an integer in the range 100–300000, default 10000. The lower bound of 100ms supports blitz-style play configurations.
+
+See resolved **01-REVIEW-012**.
+
+---
+
 ## Design
 
 The Design section specifies *how* the requirements are satisfied. It cites requirement IDs throughout. Type definitions here are drafts that the Exported Interfaces section then elevates to the module's contract; where a type appears in both, the Exported Interfaces version is authoritative.
@@ -1027,37 +1063,37 @@ export interface CentaurTeamClockState {
 
 ### 3.3 Game Configuration
 
-Motivated by 01-REQ-003, 01-REQ-010, 01-REQ-013, 01-REQ-019, 01-REQ-034–040, 01-REQ-046b, 01-REQ-048, 01-REQ-049, 01-REQ-057. Numeric ranges match the informal spec's §9.3 game configuration table where present; where not, see new **01-REVIEW-012**.
+Motivated by 01-REQ-003, 01-REQ-010, 01-REQ-013, 01-REQ-019, 01-REQ-034–040, 01-REQ-046b, 01-REQ-048, 01-REQ-049, 01-REQ-057, 01-REQ-063–077. Numeric ranges are pinned by canonical range requirements 01-REQ-063–077 (see resolved **01-REVIEW-012**) drawing from the informal spec's §9.3 game configuration table.
 
 ```typescript
 export interface GameConfig {
-  readonly boardSize: BoardSize                  // 01-REQ-003
-  readonly snakesPerTeam: number                 // 1–10, 01-REQ-019
-  readonly maxHealth: number                     // ≥1, default 100
-  readonly maxTurns: number                      // 0 = no limit, 01-REQ-058
-  readonly hazardPercentage: number              // 0–30, 01-REQ-010
-  readonly hazardDamage: number                  // 1–100, default 15, 01-REQ-046b
+  readonly boardSize: BoardSize                  // 01-REQ-003, 01-REQ-063
+  readonly snakesPerTeam: number                 // 1–10, default 5, 01-REQ-019, 01-REQ-064
+  readonly maxHealth: number                     // 1–500, default 100, 01-REQ-065
+  readonly maxTurns: number                      // 0 (disabled) or 1–1000, default 100, 01-REQ-058, 01-REQ-066
+  readonly hazardPercentage: number              // 0–30, default 0, 01-REQ-010, 01-REQ-067
+  readonly hazardDamage: number                  // 1–100, default 15, 01-REQ-046b, 01-REQ-068
   readonly fertileGround: {
     readonly enabled: boolean
-    readonly density: number                     // 1–90, 01-REQ-013
-    readonly clustering: number                  // 1–20, 01-REQ-013
+    readonly density: number                     // 1–90, default 30, 01-REQ-013, 01-REQ-069
+    readonly clustering: number                  // 1–20, default 10, 01-REQ-013, 01-REQ-070
   }
   readonly food: {
-    readonly spawnRate: number                   // 0–5, 01-REQ-048
+    readonly spawnRate: number                   // 0–5, default 0.5, 01-REQ-048, 01-REQ-071
   }
   readonly invulnPotions: {
     readonly enabled: boolean
-    readonly spawnRate: number                   // 0.01–0.2, 01-REQ-049
+    readonly spawnRate: number                   // 0.01–0.2, default 0.15, 01-REQ-049, 01-REQ-072
   }
   readonly invisPotions: {
     readonly enabled: boolean
-    readonly spawnRate: number                   // 0.01–0.2, 01-REQ-049
+    readonly spawnRate: number                   // 0.01–0.2, default 0.1, 01-REQ-049, 01-REQ-073
   }
   readonly clock: {
-    readonly initialBudgetMs: number             // ≥0, 01-REQ-035
-    readonly budgetIncrementMs: number           // 100–5000, default 500, 01-REQ-036
-    readonly firstTurnTimeMs: number             // default 60000, 01-REQ-037
-    readonly maxTurnTimeMs: number               // 1000–300000, default 10000, 01-REQ-037
+    readonly initialBudgetMs: number             // 0–600000, default 60000, 01-REQ-035, 01-REQ-074
+    readonly budgetIncrementMs: number           // 100–5000, default 500, 01-REQ-036, 01-REQ-075
+    readonly firstTurnTimeMs: number             // 1000–300000, default 60000, 01-REQ-037, 01-REQ-076
+    readonly maxTurnTimeMs: number               // 100–300000, default 10000, 01-REQ-037, 01-REQ-077
   }
 }
 ```
@@ -1154,7 +1190,16 @@ export function resolveTurn(
 
 ```
 
-`GameState` aggregates `Board`, `ReadonlyArray<SnakeState>`, `ReadonlyArray<ItemState>`, and `ReadonlyArray<CentaurTeamClockState>`. Its internal aggregate shape is *not* exported — consumers interact with the components. If a future requirement shows that a module needs the aggregate, it should be added to this section then. See new **01-REVIEW-013**.
+```typescript
+export interface GameState {
+  readonly board: Board
+  readonly snakes: ReadonlyArray<SnakeState>
+  readonly items: ReadonlyArray<ItemState>
+  readonly clocks: ReadonlyArray<CentaurTeamClockState>
+}
+```
+
+`GameState` is the concrete aggregate of the four game-state components. It is the input and output type for `resolveTurn` and is exported so that downstream modules (especially Module 04) use a single canonical shape rather than defining their own aggregates independently. See resolved **01-REVIEW-013**.
 
 ### 3.9 Invariants and Constants
 
@@ -1183,7 +1228,7 @@ export function resolveTurn(
 
 7. **Phase 4 is a no-op mutation phase.** Downstream event consumers should not expect any state changes in Phase 4 beyond the disruption buffer accumulation that already happened in Phase 3. Event emission in Phase 11 can skip Phase 4 entirely.
 
-8. **`GameState` aggregate shape is not exported.** Module 04 may define the aggregate as it sees fit (e.g. as SpacetimeDB tables); module 07 consumes components individually through its simulation layer. If this becomes awkward, revisit via 01-REVIEW-013.
+8. **`GameState` aggregate shape is now exported** (see resolved 01-REVIEW-013). The canonical shape is `{ board: Board, snakes: ReadonlyArray<SnakeState>, items: ReadonlyArray<ItemState>, clocks: ReadonlyArray<CentaurTeamClockState> }`. Module 04 must assemble this shape from its SpacetimeDB tables when calling `resolveTurn` and must destructure it from the result. Module 07 may continue to consume components individually through its simulation layer but should reference the exported `GameState` type for structural alignment.
 
 9. **Effect-state immutability is a structural invariant, not a snapshot.** 01-REQ-033 is satisfied by the ordering discipline described in Section 2.7: no code path between start-of-turn and Phase 9 writes to `snake.activeEffects`. Because `invulnerabilityLevel(snake)` and `isVisible(snake)` are pure functions over `activeEffects`, they inherit the invariant automatically. Any future phase that needs to mutate effect state mid-turn must either (a) be placed at or after Phase 9, or (b) reintroduce an explicit snapshot taken at the start of Phase 1 and reroute pre-mutation reads through it. Downstream modules that implement `resolveTurn` must preserve this invariant verbatim; violating it silently breaks disruption cancellation semantics.
 
@@ -1451,7 +1496,7 @@ The framing of the original question ("is team-level attribution sufficient?") w
 
 ---
 
-### 01-REVIEW-012: Game configuration parameter ranges
+### 01-REVIEW-012: Game configuration parameter ranges — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Design
@@ -1463,9 +1508,13 @@ The framing of the original question ("is team-level attribution sufficient?") w
 - C: Extract a separate "Configuration" sub-module whose requirements are the ranges. Too heavyweight for what is really a parameter table.
 **Informal spec reference**: §9.3.
 
+**Decision**: Option A. New requirements 01-REQ-063 through 01-REQ-077 pin canonical ranges and defaults for every `GameConfig` parameter, grouped in Section 1.11. Ranges are drawn from the informal spec §9.3 table where present; where §9.3 is open-ended (e.g., `maxHealth ≥ 1`, `initialBudgetMs ≥ 0`), upper bounds are proposed to prevent degenerate configurations (500 for `maxHealth`, 600000 for `initialBudgetMs`, 1000 for `maxTurns`). The `maxTurnTimeMs` lower bound is set to 100ms (below §9.3's 1s) to support blitz-style play. The `snakesPerTeam` default is set to 5 (the task-specified default; informal spec §9.3 shows 3).
+**Rationale**: Making ranges part of the requirements contract rather than leaving them as design-phase comments protects against informal spec drift and ensures downstream modules (especially Module 04's `DynamicGameplayParams` validation and Module 05's game configuration UI) have a single authoritative source for validation rules. Option B was rejected because dispersed range comments in Section 3.3 are easy to miss and hard to enforce across modules. Option C was rejected as too heavyweight for a parameter table.
+**Affected requirements/design elements**: 01-REQ-063–077 (new, Section 1.11), GameConfig interface comments (Section 3.3 updated to reference new requirement IDs).
+
 ---
 
-### 01-REVIEW-013: `GameState` aggregate shape not exported
+### 01-REVIEW-013: `GameState` aggregate shape not exported — **RESOLVED**
 
 **Type**: Proposed Addition
 **Phase**: Design
@@ -1476,6 +1525,10 @@ The framing of the original question ("is team-level attribution sufficient?") w
 - B: Keep the current "components only" stance. Module 04 builds its own aggregate as it sees fit, possibly different across different deployment contexts. Requires discipline.
 - C: Export `GameState` as an opaque type alias with constructor/accessor functions only. Hides the shape but prevents module 04 from adding its own fields without an explicit module-01 change.
 **Informal spec reference**: None directly. This is an engineering-scope decision that surfaced during Phase 2 design.
+
+**Decision**: Option A. A concrete `interface GameState` with four readonly fields (`board: Board`, `snakes: ReadonlyArray<SnakeState>`, `items: ReadonlyArray<ItemState>`, `clocks: ReadonlyArray<CentaurTeamClockState>`) is now exported in Section 3.8. DOWNSTREAM IMPACT note 8 is updated to reflect the exported shape.
+**Rationale**: Module 04 already assembles `{ board, snakes, items, clocks }` in its `resolve_turn` reducer (§2.7, line ~678) with exactly these four field names and compatible types. Exporting the shape eliminates drift risk — if Module 01 adds a fifth component (e.g., `config`), Module 04 gets a compile-time error rather than a silent divergence. Option B was rejected because it places the burden of alignment on discipline rather than the type system, and Module 04's current assembly already matches the proposed shape so binding it costs nothing. Option C was rejected because the shape is simple (four readonly fields) and opaqueness adds indirection without benefit.
+**Affected requirements/design elements**: Section 3.8 (GameState interface added), DOWNSTREAM IMPACT note 8 (updated from "not exported" to "now exported").
 
 ---
 
