@@ -142,7 +142,7 @@
 
 **02-REQ-059**: The Snek Centaur Server web application scope shall include both platform-level concerns (home and navigation, Centaur Team management, room browsing and creation, room lobbies and game configuration, live spectating, replay viewing, player profiles, team profiles, leaderboards) and team-internal competitive concerns (heuristic configuration, bot parameter configuration, live operator interface, team-perspective replay viewing with sub-turn timeline resolution). (Detailed feature requirements are owned by [08].)
 
-**02-REQ-043**: The Centaur Team management page shall be limited to team identity, server nomination, member management, and timekeeper assignment. It shall not expose any team-internal competitive configuration such as bot parameters, heuristic parameters, or Drive management.
+**02-REQ-043**: The Centaur Team management page shall be limited to team identity, server nomination, and member management (including Captain transfer and coach designation). It shall not expose any team-internal competitive configuration such as bot parameters, heuristic parameters, or Drive management.
 
 **02-REQ-060**: The reference Snek Centaur Server deployment (e.g., snek-centaur.cyphid.org) shall be the socially canonical entry point operated by Cyphid, but it shall have no special technical privileges. It shall use the same Convex APIs as any other Snek Centaur Server.
 
@@ -162,11 +162,7 @@
 
 **02-REQ-064**: Replays shall be presented through a unified viewer interface, not separate "platform replay" and "team replay" viewers.
 
-**02-REQ-065**: By default, the replay viewer shall provide access to every Centaur Team's within-turn actions (action log entries, stateMap snapshots, etc.).
-
-**02-REQ-066**: If a game is marked as private, viewers shall only see within-turn events of Centaur Teams they belonged to during that game.
-
-**02-REQ-067**: Admin users (as defined by [03]) shall see all within-turn events regardless of privacy settings.
+**02-REQ-065**: The replay viewer shall provide access to every Centaur Team's within-turn actions (action log entries, stateMap snapshots, etc.) to every authenticated user, for every finished game. Live (in-progress) games are not accessible through the replay viewer.
 
 ---
 
@@ -438,7 +434,7 @@ Satisfies 02-REQ-034 through 02-REQ-037.
 ```typescript
 export {
   Direction, CellType, ItemType, BoardSize, EffectFamily, EffectState,
-  Cell, SnakeId, CentaurTeamId, ItemId, TurnNumber, OperatorId,
+  Cell, SnakeId, CentaurTeamId, ItemId, TurnNumber, UserId,
   Agent, BOARD_DIMENSIONS, invulnerabilityLevel, isVisible,
   PotionEffect, SnakeState, ItemState, Board, CentaurTeamClockState,
   GameConfig, GameOutcome, TurnEvent, DeathCause,
@@ -497,30 +493,28 @@ Spectator Browser
     └── Subscribe: platform state (game record, room state)
 ```
 
-The SpacetimeDB connection uses a spectator access token ([03]) — an RS256-signed JWT with `sub: "spectator:{operatorId}"` (where `operatorId` is the Convex `users._id` string) — that authorizes subscription queries but does not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectating connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). The Convex connection provides reactive platform state updates (game record status, room state). Outside of spectating, the web client uses only its Convex client connection for platform features (rooms, profiles, leaderboards).
+The SpacetimeDB connection uses a spectator access token ([03]) — an RS256-signed JWT with `sub: "spectator:{spectatorUserId}"` (where `spectatorUserId` is the Convex `users._id` string) — that authorizes subscription queries but does not authorize any reducer calls (no `stage_move`, no `declare_turn_over`). Spectating connections are subject to the same RLS invisibility filtering as opponent team connections — spectators cannot see invisible snakes of any team (02-REQ-010). The Convex connection provides reactive platform state updates (game record status, room state). Outside of spectating, the web client uses only its Convex client connection for platform features (rooms, profiles, leaderboards).
 
 **Operator web app serving** (02-REQ-040). The operator interface is served by the team's nominated Snek Centaur Server. The server serves static assets (HTML, JS, CSS) over HTTP and the browser client establishes the dual connections described above. Since every Snek Centaur Server serves the same unified web application, a user can visit any server for platform pages; the operator interface for a specific team is accessed via the server that team has nominated.
 
 ### 2.19 Unified Web Application Design
 
-Satisfies 02-REQ-058, 02-REQ-059, 02-REQ-043, 02-REQ-060, 02-REQ-061, 02-REQ-062, 02-REQ-063, 02-REQ-064 through 02-REQ-067.
+Satisfies 02-REQ-058, 02-REQ-059, 02-REQ-043, 02-REQ-060, 02-REQ-061, 02-REQ-062, 02-REQ-063, 02-REQ-064, 02-REQ-065.
 
 **Single unified application**. There is no separate Game Platform Server or Game Platform Client. Every Snek Centaur Server serves the same unified web application built with Svelte 5 and shadcn-svelte. The application covers:
 
 | Scope | Pages |
 |-------|-------|
-| **Platform-level** | Home/navigation, Centaur Team management (identity, server nomination, member management, timekeeper assignment), room browsing/creation, room lobby/game config, live spectating, unified replay viewer, player profiles, team profiles, leaderboards |
+| **Platform-level** | Home/navigation, Centaur Team management (identity, server nomination, member management), room browsing/creation, room lobby/game config, live spectating, unified replay viewer, player profiles, team profiles, leaderboards |
 | **Team-internal** | Heuristic config, bot parameter config, live operator interface, game history |
 
 All platform data is accessed via the user's own Convex client connection, authenticated by their Google identity. The read-access principle (02-REQ-062) ensures users see the same data regardless of which Snek Centaur Server they visit.
 
-**Replay unification** (02-REQ-064 through 02-REQ-067). The replay viewer is a single interface providing:
+**Replay unification** (02-REQ-064, 02-REQ-065). The replay viewer is a single interface providing:
 - Turn-level board state and event log for all viewers.
-- Within-turn action timeline (action log entries, stateMap snapshots) for each Centaur Team.
-- Privacy gating: for private games, viewers only see within-turn events of teams they belonged to during that game.
-- Admin override: admin users see all within-turn events regardless of privacy.
+- Within-turn action timeline (action log entries, stateMap snapshots) for each Centaur Team, visible to all authenticated users.
 
-**Team management boundary** (02-REQ-043). The Centaur Team management page exposes only identity, server nomination, member management, and timekeeper assignment. Bot parameters, heuristic configuration, and Drive management are team-internal pages accessible only to team members through the operator interface.
+**Team management boundary** (02-REQ-043). The Centaur Team management page exposes only identity, server nomination, member management, and coach designation per [05-REQ-067]. Bot parameters, heuristic configuration, and Drive management are team-internal pages accessible only to team members and coaches through the operator interface.
 
 **Reference deployment** (02-REQ-060). The reference Snek Centaur Server deployment (e.g., snek-centaur.cyphid.org) is the socially canonical entry point but has no special technical privileges. It uses the same Convex APIs as any other Snek Centaur Server.
 
@@ -636,7 +630,7 @@ The shared engine codebase re-exports all of Module 01's exported interfaces (Se
 export {
   // Enums and branded types (01 §3.1)
   Direction, CellType, ItemType, BoardSize, EffectFamily, EffectState,
-  Cell, SnakeId, CentaurTeamId, ItemId, TurnNumber, OperatorId, Agent,
+  Cell, SnakeId, CentaurTeamId, ItemId, TurnNumber, UserId, Agent,
   BOARD_DIMENSIONS, invulnerabilityLevel, isVisible,
 
   // State shapes (01 §3.2)
@@ -732,7 +726,7 @@ Motivated by 02-REQ-038, 02-REQ-039, 02-REQ-041, 02-REQ-055, 02-REQ-056.
 export interface OperatorConnectionModel {
   readonly spacetimeDb: {
     readonly transport: 'WebSocket'
-    readonly authMechanism: 'RS256-signed JWT validated via OIDC (sub: operator:{operatorId})'
+    readonly authMechanism: 'RS256-signed JWT validated via OIDC (sub: operator:{operatorUserId})'
     readonly capabilities: readonly ['subscribe_game_state', 'stage_move', 'declare_turn_over']
   }
   readonly convex: {
@@ -745,7 +739,7 @@ export interface OperatorConnectionModel {
 export interface SpectatorConnectionModel {
   readonly spacetimeDb: {
     readonly transport: 'WebSocket'
-    readonly authMechanism: 'RS256-signed JWT validated via OIDC (sub: spectator:{operatorId})'
+    readonly authMechanism: 'RS256-signed JWT validated via OIDC (sub: spectator:{spectatorUserId})'
     readonly capabilities: readonly ['subscribe_game_state']
   } | null
   readonly convex: {
@@ -814,13 +808,13 @@ export interface ServerNominationModel {
 
 ### 3.10 Unified Web Application Boundary
 
-Motivated by 02-REQ-058, 02-REQ-059, 02-REQ-043, 02-REQ-064 through 02-REQ-067.
+Motivated by 02-REQ-058, 02-REQ-059, 02-REQ-043, 02-REQ-064, 02-REQ-065.
 
 ```typescript
 export interface UnifiedWebApplicationScope {
   readonly platformPages: readonly [
     'home_navigation', 'centaur_team_management', 'server_nomination',
-    'member_management', 'timekeeper_assignment', 'room_browsing', 'room_creation',
+    'member_management', 'room_browsing', 'room_creation',
     'room_lobby', 'game_configuration', 'live_spectating', 'unified_replay_viewer',
     'player_profiles', 'centaur_team_profiles', 'leaderboards'
   ]
@@ -832,14 +826,12 @@ export interface UnifiedWebApplicationScope {
     'bot_parameters', 'heuristic_configuration', 'drive_management'
   ]
   readonly replayUnification: {
-    readonly defaultAccess: 'all teams within-turn actions visible'
-    readonly privateGames: 'only own team within-turn actions visible'
-    readonly adminOverride: 'all within-turn actions visible regardless of privacy'
+    readonly defaultAccess: 'all teams within-turn actions visible to all authenticated users'
   }
 }
 ```
 
-**DOWNSTREAM IMPACT**: [08] must implement the unified web application covering both platform-level and team-internal pages. The `centaur_team_management` page must not expose bot parameters, heuristic configuration, or Drive management. The replay viewer must implement privacy gating and admin override for within-turn action access.
+**DOWNSTREAM IMPACT**: [08] must implement the unified web application covering both platform-level and team-internal pages. The `centaur_team_management` page must not expose bot parameters, heuristic configuration, or Drive management. Replay access is fully public to all authenticated users.
 
 ### 3.11 DOWNSTREAM IMPACT Notes
 

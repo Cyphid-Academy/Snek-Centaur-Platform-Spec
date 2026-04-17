@@ -22,7 +22,7 @@
 
 **08-REQ-007**: After authentication, the application shall resolve the authenticated identity to a user record per [05-REQ-004] and [05-REQ-005]. All subsequent UI actions shall be attributed to that user record for the duration of the session.
 
-**08-REQ-008**: The application shall gate affordances that are restricted to specific team roles ([05-REQ-011]) — in particular the timekeeper affordances of §8.14 and the Captain-only affordances of §8.5 — on the authenticated human's current role as read from [05] via [06]. Role changes observed through subscription shall take effect in the UI without requiring the operator to reload the page.
+**08-REQ-008**: The application shall gate affordances that are restricted to the Captain role — in particular the Captain-only control affordances of §8.14 and the Captain-only affordances of §8.4 (heuristic configuration) and §8.5 (bot parameters) — on the authenticated human's current Captain status as read from [05] via [06]. Captain status changes observed through subscription shall take effect in the UI without requiring the operator to reload the page.
 
 **08-REQ-009** *(negative)*: The application shall never issue a SpacetimeDB access token on its own. Access tokens for a game are obtained through the Convex-mediated issuance path of [05-REQ-035] and presented to SpacetimeDB by the browser.
 
@@ -58,13 +58,13 @@
 
 **08-REQ-015**: For each registered Preference, the page shall display and allow editing of: (a) whether the Preference is active on new snakes by default and (b) its default portfolio weight ([06-REQ-006]).
 
-**08-REQ-016**: For each registered Drive type, the page shall display and allow editing of: (a) its default portfolio weight when added to a snake and (b) its ordinal position in the Drive dropdown presented during Drive management ([06-REQ-007], §8.13).
+**08-REQ-016**: For each registered Drive type, the page shall display and allow editing of: (a) its default portfolio weight when added to a snake, (b) its `nickname` for UI display, and (c) pinning status in the Drive dropdown presented during Drive management ([06-REQ-007], §8.13). The Captain may reorder the `pinnedHeuristics` array and assign nicknames to Drives from this page. *(Amended per 08-REVIEW-005 resolution: ordinal position replaced with nickname and pinning controls.)*
 
-**08-REQ-017**: Mutations initiated from this page shall be routed through the Centaur state function contract surface ([06-REQ-030]) and shall be rejected by that surface if the authenticated caller is not a current member of the owning Centaur Team ([06-REQ-008], [06-REQ-031]). The application shall surface any such rejection to the operator.
+**08-REQ-017**: Mutations to team-scoped heuristic defaults initiated from this page shall be routed through the Centaur state function contract surface ([06-REQ-030]) and shall be rejected by that surface if the authenticated caller is not the Captain of the owning Centaur Team ([06-REQ-008], [06-REQ-031]). The application shall surface any such rejection to the operator. Non-Captain team members may view the heuristic configuration page in read-only mode. *(Amended per 08-REVIEW-001 resolution: team-scoped heuristic default mutations are Captain-only.)*
 
 **08-REQ-018**: The page shall make explicit to the operator that edits affect defaults for future games only and shall not retroactively affect any game currently in progress ([06-REQ-009]). The concrete UI affordance by which this is communicated is a design-phase decision.
 
-**08-REQ-019** *(negative)*: The heuristic configuration page shall not permit mutations to any per-snake or per-game state. It operates exclusively on team-scoped heuristic defaults. See REVIEW 08-REVIEW-001.
+**08-REQ-019** *(negative)*: The heuristic configuration page shall not permit mutations to any per-snake or per-game state. It operates exclusively on team-scoped heuristic defaults. Only the Captain may edit these defaults; other team members see a read-only view. *(Amended per 08-REVIEW-001 resolution: Captain-only for team-scoped default mutations.)*
 
 ---
 
@@ -72,9 +72,9 @@
 
 **08-REQ-020**: The bot parameters page shall be scoped to a specific hosted Centaur Team. It shall display and allow editing of the team's bot parameter record ([06-REQ-011]), comprising at minimum: the softmax global temperature, the default operator mode (Centaur or Automatic), the automatic-mode time allocation applied to turns other than turn 0, and the automatic-mode time allocation applied to turn 0.
 
-**08-REQ-021**: Mutations initiated from this page shall be routed through the Centaur state function contract surface ([06-REQ-030]) and rejected if the caller is not a member of the owning Centaur Team ([06-REQ-012], [06-REQ-031]).
+**08-REQ-021**: Mutations initiated from this page shall be routed through the Centaur state function contract surface ([06-REQ-030]) and rejected if the caller is not the Captain of the owning Centaur Team ([06-REQ-012], [06-REQ-031]). Non-Captain team members may view the bot parameters page in read-only mode. *(Amended per 08-REVIEW-001 resolution: Captain-only for bot parameter mutations.)*
 
-**08-REQ-022**: The page shall make clear to the operator that the default operator mode takes effect on the next game the team enters, not on any game currently in progress. See REVIEW 08-REVIEW-002.
+**08-REQ-022**: The page shall make clear to the operator that all `global_centaur_params` values — including the default operator mode, softmax temperature, and automatic-mode time allocations — take effect on the next game the team enters, not on any game currently in progress. At game start, these defaults are copied into game-scoped state per [06-REQ-040a] and are thereafter independent of the team defaults. *(Amended per 08-REVIEW-002 resolution: clarified that all global defaults affect next game only.)*
 
 **08-REQ-023** *(negative)*: The bot parameters page shall not expose any parameter that is a game-configuration parameter owned by [05-REQ-023]. Game-configuration parameters are set in the room lobby (§8.8).
 
@@ -88,11 +88,11 @@
 
 ### 8.5b Team Management
 
-**08-REQ-023b**: The application shall provide a Team Management view accessible to every current member of a Centaur Team. The view shall display at minimum the team's name, display colour, current Captain, current members with their roles, and the nominated server domain together with its latest health status per [05-REQ-009] and [02-REQ-029].
+**08-REQ-023b**: The application shall provide a Team Management view accessible to every current member of a Centaur Team. The view shall display at minimum the team's name, display colour, current Captain, current members with their roles, the team's designated coaches per [05-REQ-067], and the nominated server domain together with its latest health status per [05-REQ-009] and [02-REQ-029].
 
 **08-REQ-023c**: The application shall permit any authenticated user to create a new Centaur Team per [05-REQ-008]. On creation, the creating user shall become the team's Captain per [05-REQ-011].
 
-**08-REQ-023d**: The Team Management view shall expose, exclusively to the team's current Captain, affordances to mutate team identity (name, display colour), to set or update the team's nominated server domain (`nominatedServerDomain` per [05-REQ-014]), to add or remove human members (per [05-REQ-012]), to assign or unassign the Timekeeper role to a current member (per [05-REQ-011]), and to transfer the Captain role to another current member (per [05-REQ-012]).
+**08-REQ-023d**: The Team Management view shall expose, exclusively to the team's current Captain, affordances to mutate team identity (name, display colour), to set or update the team's nominated server domain (`nominatedServerDomain` per [05-REQ-014]), to add or remove human members (per [05-REQ-012]), to add or remove coaches per [05-REQ-067] (via the `addCoach` / `removeCoach` mutations), and to transfer the Captain role to another current member (per [05-REQ-012]).
 
 **08-REQ-023e**: The Team Management view shall, while a team is participating in any game whose status is `playing`, visibly disable the mutating affordances of [08-REQ-023d] that are frozen by [05-REQ-013], and shall explain to the user that the affordance is temporarily unavailable due to a game in progress.
 
@@ -114,13 +114,13 @@
 
 ### 8.7 Game History Page
 
-**08-REQ-024**: The game history page shall be scoped to a specific hosted Centaur Team. It shall list completed games in which the authenticated human participated as a member of the owning team, in reverse chronological order.
+**08-REQ-024**: The game history page shall be scoped to a specific hosted Centaur Team. It shall list completed games in which the authenticated human was either (a) a member of the owning team at the time of the game (per the game's participating-team snapshot of [05-REQ-029]) or (b) a current member of the owning team, in reverse chronological order.
 
 **08-REQ-025**: Each listing shall display at minimum: room name, date, opponent teams, the team's result (win/loss/draw — subject to resolution of score semantics per [05-REVIEW-006]), and final scores ([05-REQ-038]). Listing data shall be sourced from [05]'s read surface.
 
 **08-REQ-026**: Selecting a listing shall open the replay viewer (§8.15) for that game. The replay viewer entry point from the game history page shall default to the team-perspective sub-turn view.
 
-**08-REQ-027** *(negative)*: The game history page shall not expose games the authenticated human did not participate in, including games played by other members of the same team before the human joined. See REVIEW 08-REVIEW-003.
+**08-REQ-027** *(negative)*: The game history page shall not expose games for teams the authenticated human has no relationship with. A user has a relationship with a team's game if they were a member of that team at the time of the game (per the participating-team snapshot) or are a current member of that team.
 
 ---
 
@@ -166,13 +166,13 @@
 
 ### 8.10 Live Operator Interface — Header
 
-**08-REQ-032**: The header of the live operator interface shall display at minimum: the current turn number, the team clock countdown, the team's remaining time budget, an indicator of the current operator mode (Centaur or Automatic), the measured network latency to the team's SpacetimeDB instance, a presence display of other operators currently connected to the same game from the same team, and — conditionally, per §8.14 — the timekeeper controls.
+**08-REQ-032**: The header of the live operator interface shall display at minimum: the current turn number, the team clock countdown, the team's remaining time budget, an indicator of the current operator mode (Centaur or Automatic), the measured network latency to the team's SpacetimeDB instance, a Convex-hosted presence display of other operators currently connected to the same game from the same team, and — conditionally, per §8.14 — the Captain control affordances.
 
 **08-REQ-033**: The team clock countdown shall be presented with sufficient precision to convey imminent deadline: the concrete presentation of seconds-to-one-decimal and a warning state below a sub-one-second threshold is the informal spec's proposal and is the minimum required resolution. When the team's turn has been declared over ([01-REQ-039]) the countdown shall be replaced by a "turn submitted" indicator and shall not flicker back to a countdown while the other team(s) finish their declarations.
 
-**08-REQ-034**: The operator-mode indicator shall reflect the current operator mode of the game as recorded in [06]'s selection or mode state. Changes to the mode initiated by the timekeeper (§8.14) shall update the indicator for all connected operators on the team without a page reload, via the subscription of [06-REQ-043].
+**08-REQ-034**: The operator-mode indicator shall reflect the current operator mode of the game as recorded in [06]'s game-scoped team state ([06-REQ-040a]). Changes to the mode initiated by the Captain (§8.14) shall update the indicator for all connected operators on the team without a page reload, via the subscription of [06-REQ-043].
 
-**08-REQ-035**: The presence display shall show each other currently-connected operator on the team by their display name and a per-operator colour that is stable within the game's lifetime and is the same colour used for that operator's selection shadow on the board (§8.13). See REVIEW 08-REVIEW-004.
+**08-REQ-035**: The presence display shall show each other currently-connected operator on the team by their display name and a per-operator colour that is stable within the game's lifetime and is the same colour used for that operator's selection shadow on the board (§8.13). Presence state shall be sourced from a Convex-hosted presence mechanism; the design phase should use the `@convex-dev/presence` library. *(Amended per 08-REVIEW-004 resolution: presence is Convex-hosted.)*
 
 **08-REQ-036**: The network latency indicator shall be a client-measured round-trip time against the team's SpacetimeDB subscription and shall not require any new Convex or Centaur-state field to support it. The exact measurement methodology is a design-phase decision.
 
@@ -230,7 +230,7 @@
 
 **08-REQ-062**: In Automatic mode, the Snek Centaur Server shall declare the team's turn over ([01-REQ-039]) at the sooner of (a) the bot-framework's compute queue being cleared for all owned snakes and (b) the configured automatic-mode time allocation from bot parameters ([06-REQ-011]) elapsing within the current turn. Operator interactions — selection, Drive edits, manual overrides — shall remain possible during this window but shall not pause or extend the automatic declaration timer. A separate turn-0 time allocation ([06-REQ-011]) shall govern the Automatic-mode submission timer on turn 0 only.
 
-**08-REQ-063**: In Centaur mode, the Snek Centaur Server shall not declare the team's turn over except on explicit action from the timekeeper (§8.14) or on expiry of the team's per-turn clock / time budget ([01-REQ-037], [01-REQ-038]). In this mode, the team's time budget is spent into at human time scale, enabling strategically significant decisions at human pace.
+**08-REQ-063**: In Centaur mode, the Snek Centaur Server shall not declare the team's turn over except on explicit action from the Captain (§8.14) or on expiry of the team's per-turn clock / time budget ([01-REQ-037], [01-REQ-038]). In this mode, the team's time budget is spent into at human time scale, enabling strategically significant decisions at human pace.
 
 **08-REQ-064**: The initial operator mode of each game shall be read from the team's bot parameter record ([06-REQ-011]) as the default operator mode at the moment the game transitions to `playing`.
 
@@ -238,7 +238,11 @@
 
 ### 8.13 Live Operator Interface — Drive Management
 
-**08-REQ-052**: The move interface for a selected snake shall expose a control by which the current selector can add a Drive to that snake. Adding shall present a dropdown of registered Drive types ordered by each type's configured dropdown ordinal ([06-REQ-007]). See REVIEW 08-REVIEW-005.
+**08-REQ-052**: The move interface for a selected snake shall expose a control by which the current selector can add a Drive to that snake. Adding shall present a dropdown of registered Drive types ordered by the pinned-heuristics-then-lexicographic scheme: pinned heuristics (from the `pinnedHeuristics` array in `global_centaur_params`) appear first in pinned order; remaining heuristics are ordered lexicographically by `nickname`, with `heuristicId` as tiebreaker ([06-REQ-007]). *(Amended per 08-REVIEW-005 resolution: dropdownOrder replaced with pinned-heuristics + lexicographic fallback.)*
+
+**08-REQ-052a**: The application shall provide a **coach mode** entry point into the live operator interface for any in-progress game involving a Centaur Team for which the authenticated user is a designated coach per [05-REQ-067] or for which the user holds implicit coach permission as an admin per [05-REQ-066]. Coach mode shall render the same live operator interface as a member of that team would see — the full board display, selection state, Drive portfolios, heuristic decompositions, action log, header, and Captain controls panel — but every mutating affordance (selection mutation, snake selection acquisition, Drive add/remove, portfolio weight adjustment, mode toggle, turn submission, ready check, and any Captain-only control) shall be disabled and visibly indicated as read-only. The coach connection to the team's filtered SpacetimeDB views shall be obtained via the coach SpacetimeDB token issuance path defined in [05] §3.4 and authorised per [05-REQ-067]. The coach mode entry point shall be reachable from the game's Live Spectating view (§8.16) and from the Team Profile (§8.18a) when an in-progress game is in flight.
+
+**08-REQ-052b** *(negative)*: Coach mode shall not expose any affordance that would cause a write to Convex or to SpacetimeDB on behalf of the team being coached. Any UI control that would, in member mode, dispatch such a write shall be either hidden or rendered disabled in coach mode.
 
 **08-REQ-053**: Selecting a Drive type from the dropdown shall activate the targeting mode appropriate to that Drive type's target type:
 - **Snake targeting**: the board enters a mode in which only those snakes for which the Drive's target-eligibility predicate ([07-REQ-007]) returns true are highlighted as clickable; ineligible snakes are visually dimmed; clicking an eligible snake confirms it as the Drive's target.
@@ -256,15 +260,15 @@
 
 ---
 
-### 8.14 Timekeeper Controls
+### 8.14 Captain Controls
 
-**08-REQ-065**: When the authenticated human is the current timekeeper of the Centaur Team ([05-REQ-011]), the header of the live operator interface shall expose two timekeeper affordances: (a) an operator-mode toggle that switches between Centaur and Automatic mode, and (b) a turn-submit action that immediately declares the team's turn over ([01-REQ-039]) regardless of the current operator mode, submitting all currently-staged moves.
+**08-REQ-065**: When the authenticated human is the Captain of the Centaur Team ([05-REQ-011]), the header of the live operator interface shall expose two Captain control affordances: (a) an operator-mode toggle that switches between Centaur and Automatic mode, and (b) a turn-submit action that immediately declares the team's turn over ([01-REQ-039]) regardless of the current operator mode, submitting all currently-staged moves.
 
-**08-REQ-066**: Timekeeper affordances shall additionally be bindable to keyboard shortcuts so the timekeeper can operate them without pointer input. The specific key bindings are a design-phase decision.
+**08-REQ-066**: Captain control affordances shall additionally be bindable to keyboard shortcuts so the Captain can operate them without pointer input. The specific key bindings are a design-phase decision.
 
-**08-REQ-067** *(negative)*: Operators who are not the current timekeeper shall not see the timekeeper affordances, and any attempt to invoke them — including via keyboard shortcut — shall be rejected by [06]'s function contract surface per [06-REQ-031] even if it reaches the mutation layer. See REVIEW 08-REVIEW-007.
+**08-REQ-067** *(negative)*: Operators who are not the Captain shall not see the Captain control affordances, and any attempt to invoke them — including via keyboard shortcut — shall be rejected by [06]'s function contract surface per [06-REQ-031] even if it reaches the mutation layer.
 
-**08-REQ-068**: Operator-mode toggles issued by the timekeeper shall produce a `mode_toggled` entry in the action log ([06-REQ-036]). Turn submissions issued by the timekeeper shall produce the team-side turn-submission event category of [06-REQ-036].
+**08-REQ-068**: Operator-mode toggles issued by the Captain shall produce a `mode_toggled` entry in the action log ([06-REQ-036]). Turn submissions issued by the Captain shall produce the team-side turn-submission event category of [06-REQ-036].
 
 ---
 
@@ -297,18 +301,6 @@
 **08-REQ-075b**: The board-level replay mode shall not reconstruct or display any data that depends on the Centaur-subsystem action log of [06]. In particular, the board-level mode shall not display which operator had selected which snake at any moment, nor any per-operator coloured shadows, nor any stateMap / worst-case-world / heuristic breakdown data.
 
 **08-REQ-075c**: The replay viewer shall expose a **direct link** affordance that produces a URL identifying the specific game being viewed, such that another authenticated user opening the URL is taken directly to that game's replay viewer.
-
----
-
-### 8.15a Replay Viewer — Game Privacy
-
-**08-REQ-075d**: For games marked as **private** per [05-REQ-069], the replay viewer shall apply the following access restrictions:
-- Board-level replay (turn-granularity board state, scoreboard, event log) shall be visible to all authenticated users, identical to non-private games.
-- Team-perspective replay (sub-turn within-turn actions — operator selections, Drive states, stateMaps, worst-case worlds, decision breakdowns, staged-move attribution) shall be visible only to members of the team whose perspective is being viewed. Members of opposing teams shall not be able to view within-turn actions of a team they did not belong to.
-
-**08-REQ-075e**: For games not marked as private, replay access shall be unrestricted: any authenticated user may view both the board-level replay and the team-perspective replay for any participating team.
-
-**08-REQ-075f**: Platform admin users ([05-REQ-065]) shall bypass game privacy restrictions per [05-REQ-067]. Admin users shall have access to the team-perspective replay of any team in any game, regardless of privacy settings or team membership.
 
 ---
 
@@ -358,7 +350,7 @@
 
 **08-REQ-090**: The application shall provide a **Player Profile** view for every user record per [05-REQ-004]. Each authenticated user shall have direct access to their own Player Profile via the global navigation of [08-REQ-010]. Access to other users' profiles shall be permitted at minimum via links from team member listings and game history (see 08-REVIEW-016 for the scope of public profile visibility).
 
-**08-REQ-091**: The Player Profile view shall display at minimum the user's display name, email address (subject to 08-REVIEW-016), current and historical Centaur Team memberships, and a chronological **game history** listing every game in which the user participated (via the per-game participating-team snapshot of [05-REQ-029]) together with each game's room, date, the participating teams, the final result (win/loss/draw), and the final scores per [05-REQ-038].
+**08-REQ-091**: The Player Profile view shall display at minimum the user's display name, email address (subject to 08-REVIEW-016), current and historical Centaur Team memberships, and a chronological **game history** listing every game in which the user was either a member of a participating team at the time (per the game's participating-team snapshot of [05-REQ-029]) or is a current member of one of those teams, together with each game's room, date, the participating teams, the final result (win/loss/draw), and the final scores per [05-REQ-038].
 
 **08-REQ-092**: The Player Profile view shall display aggregate statistics derived from the user's game history: at minimum, games played, win rate, and average team score. These statistics shall be computed from the same data that populates the game history listing and shall therefore be consistent with it.
 
@@ -370,7 +362,7 @@
 
 **08-REQ-094**: The application shall provide a **Team Profile** view for every Centaur Team per [05-REQ-008]. The Team Profile shall be accessible to every authenticated user (see 08-REVIEW-016 on the scope of public visibility).
 
-**08-REQ-095**: The Team Profile view shall display at minimum the team's name, display colour, current Captain, current members and their roles per [05-REQ-011], the team's nominated server domain and its latest health status per [05-REQ-009], and a chronological game history listing every game in which the team participated, with each game's room, date, opposing teams, final result, and final scores.
+**08-REQ-095**: The Team Profile view shall display at minimum the team's name, display colour, current Captain, current members per [05-REQ-011], the team's nominated server domain and its latest health status per [05-REQ-009], and a chronological game history listing every game in which the team participated, with each game's room, date, opposing teams, final result, and final scores. The game history shall include all games in which the team participated, visible to any authenticated user.
 
 **08-REQ-096**: The Team Profile view shall display aggregate statistics derived from the team's game history: at minimum, games played, win rate, average score, and head-to-head records against each other team the team has ever played against.
 
@@ -414,7 +406,8 @@
 
 - **Team visibility**: The admin shall be able to view all Centaur Teams, their members, roles, and nominated server domains, regardless of membership ([05-REQ-066]).
 - **Game visibility**: The admin shall be able to view all games (active and completed), including those in rooms or involving teams the admin is not a member of ([05-REQ-066]).
-- **Replay access**: The admin shall be able to view the team-perspective replay (sub-turn within-turn actions) for any team in any game, bypassing game privacy restrictions ([05-REQ-067], [08-REQ-075f]).
+- **Replay access**: The admin shall be able to view the team-perspective replay (sub-turn within-turn actions) for any team in any game, regardless of team membership ([05-REQ-066]). For finished games this access is shared with all authenticated users; the admin distinction is meaningful for live-game cross-team visibility, where the admin holds implicit coach permission for every team per [05-REQ-067].
+- **Live coach access**: The admin shall be able to enter the live operator interface of any in-progress game in any team's read-only coach mode ([08-REQ-052a]) without being explicitly designated as a coach of that team.
 
 **08-REQ-096b** *(negative)*: The admin experience shall be read-only with respect to game state and Centaur-subsystem state. Admin users shall not be able to stage moves, edit Drive portfolios, toggle operator modes, or otherwise act as operators for teams they do not belong to. Admin visibility is observational, not operational.
 
@@ -448,7 +441,7 @@
 
 ## REVIEW Items
 
-### 08-REVIEW-001: Role gating of heuristic configuration and bot parameters
+### 08-REVIEW-001: Role gating of heuristic configuration and bot parameters — **RESOLVED**
 
 **Type**: Ambiguity
 **Phase**: Requirements
@@ -461,9 +454,13 @@
 - D: Page is read-only to general members; an "edit mode" affordance requires the captain to promote.
 **Informal spec reference**: §7.1, §7.2, §8.2.
 
+**Decision**: Captain-only for team-scoped defaults; any team member for game-scoped overrides. Only the Captain can edit `global_centaur_params` and team-level heuristic defaults in `heuristic_config`. Any team member can edit game-scoped heuristic weight overrides (per-snake Drive weights, Preference activation, temperature overrides during a live game). There is no longer a timekeeper role (eliminated per 05-REVIEW-014).
+**Rationale**: Team-scoped defaults (global temperature, default operator mode, heuristic default weights, dropdown ordering) represent strategic decisions that affect all future games for the entire team. Restricting these to the Captain prevents a newly-added operator from unilaterally changing team strategy. Game-scoped overrides, by contrast, are tactical in-game adjustments that operators need to make in real time during gameplay — requiring Captain approval for every weight tweak during a live game would be operationally unworkable. This split aligns with the existing Captain/member distinction in team management (§8.5b) and is consistent with the elimination of the timekeeper role per 05-REVIEW-014.
+**Affected requirements/design elements**: 08-REQ-019 amended (team-scoped heuristic defaults are Captain-only). 08-REQ-008 amended (references updated role list). 08-REQ-017 amended (Captain-only for team-scoped mutations). 08-REQ-021 amended (Captain-only for bot params). 06-REQ-008 amended (Captain-only for team-scoped heuristic config writes). 06-REQ-012 amended (Captain-only for bot param writes). Design §2.2.1 authorization updated.
+
 ---
 
-### 08-REVIEW-002: Mid-game effect of default-operator-mode edits
+### 08-REVIEW-002: Mid-game effect of default-operator-mode edits — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Requirements
@@ -475,9 +472,13 @@
 - C: Edit is silently blocked while the team has a game in `playing` status.
 **Informal spec reference**: §7.2.
 
+**Decision**: Option A — all global defaults (including default operator mode) take effect only upon creating game-specific state at game launch. Running games are unaffected by edits to team-scoped defaults.
+**Rationale**: This is already the semantics expressed by [06-REQ-009] for heuristic config, and the same principle applies uniformly to all team-scoped defaults including `global_centaur_params`. At game start, `initializeGameCentaurState` ([06-REQ-014], [06-REQ-040a]) copies team defaults into game-scoped state as a point-in-time snapshot. Once the game is live, the game-scoped `game_centaur_state` record is the live source of truth; the team defaults are irrelevant until the next game starts. This avoids the confusion of Option B (mid-game mode resets would be disruptive) and the unnecessary restriction of Option C (teams should be free to prepare their defaults for the next game while a current game is in progress).
+**Affected requirements/design elements**: 08-REQ-022 amended with explicit language that all `global_centaur_params` edits affect the next game only. 06-REQ-009 confirmed as already correct (applies to all team-scoped defaults). 06-REQ-040a confirmed as already expressing the snapshot semantics correctly.
+
 ---
 
-### 08-REVIEW-003: Game history visibility scope
+### 08-REVIEW-003: Game history visibility scope — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Requirements
@@ -489,9 +490,13 @@
 - C: Personal by default, toggle to show all.
 **Informal spec reference**: §7.3.
 
+**Decision**: A user sees a game in their history if they were either (a) a member of a participating team at the time of the game (per the game's participating-team snapshot of [05-REQ-029]) or (b) a current member of one of the participating teams now. Additionally, replay access for MVP is fully public: all replay data (including within-turn operational data of both teams) is publicly accessible to all authenticated users once a game has finished. The game history visibility rule only determines which games are proactively listed in a user's interface; if someone has a direct link to a game, any registered user can view the full replay. Private games are eliminated entirely for MVP.
+**Rationale**: The expanded visibility rule (historical OR current membership) gives captains and coaches visibility into team games that occurred before they joined, which is important for team strategy review. Making replays fully public for MVP simplifies the access model dramatically — there is no privacy-gating complexity — and aligns with the open competitive spirit of the platform. The private-games concept added significant cross-module complexity for a feature that is not essential to MVP. It can be reintroduced in a future version if needed.
+**Affected requirements/design elements**: 08-REQ-024 amended (historical or current team membership). 08-REQ-027 amended (removed negative restriction). 08-REQ-091 amended (Player Profile game history uses historical-or-current rule). 08-REQ-095 amended (Team Profile game history). 08-REQ-075d, 08-REQ-075e, 08-REQ-075f removed (private games eliminated). §8.15a removed. Private games removed across all modules: 02-REQ-066, 02-REQ-067 removed; 05-REQ-069, 05-REQ-070, 05-REQ-071, 05-REQ-072 removed; the original privacy-bypass 05-REQ-067 was removed (the 05-REQ-067 number slot has since been reused for the unrelated Coach Role); §5.12 removed (the §5.12 section number has since been reused for the unrelated Coach Role section); 05-REQ-023 game privacy row removed; 06 getCentaurActionLog privacy clause removed; 03-REQ-063 amended (privacy reference removed). GameConfig.gamePrivacy field removed.
+
 ---
 
-### 08-REVIEW-004: Presence state store
+### 08-REVIEW-004: Presence state store — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Requirements
@@ -503,9 +508,13 @@
 - C: Derived from selection state only — "connected" means "has ever held a selection this session". Loses unselected-operator visibility.
 **Informal spec reference**: §7.5 ("Connected operators shown as coloured dots with nicknames").
 
+**Decision**: Roughly Option B — Convex-hosted presence solution. Operator presence state shall be managed through a Convex-hosted presence mechanism. The design phase should use the `@convex-dev/presence` library, which provides ephemeral presence state with heartbeat-based TTL cleanup natively within the Convex reactive query system.
+**Rationale**: A Convex-hosted presence solution keeps operator presence within the same reactive data layer that the operator interface already subscribes to for all other state, avoiding the need for a separate subscription channel between the browser and the Snek Centaur Server. The `@convex-dev/presence` library provides exactly the semantics needed: ephemeral per-user presence with automatic cleanup when a client disconnects, delivered via Convex's reactive query system. This is simpler than Option A (which would require a separate real-time channel and server-side presence management) and richer than Option C (which loses visibility of unselected but connected operators).
+**Affected requirements/design elements**: 08-REQ-032 amended to reference Convex-hosted presence. 08-REQ-035 amended to reference Convex-hosted presence. Design-phase note added: the implementation should use the `@convex-dev/presence` library for operator presence state.
+
 ---
 
-### 08-REVIEW-005: Drive dropdown ordinal collisions
+### 08-REVIEW-005: Drive dropdown ordinal collisions — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Requirements
@@ -516,6 +525,10 @@
 - B: Secondary sort by Drive type registration order.
 - C: Enforce uniqueness of ordinals in the heuristic config contract ([06-REQ-007]).
 **Informal spec reference**: §7.6.
+
+**Decision**: Replace the `dropdownOrder` ordinal system entirely with a pinned-heuristics list and lexicographic fallback. A `pinnedHeuristics` field (ordered array of heuristic IDs) is added to `global_centaur_params`. A `nickname` field is added to `heuristic_config`. The `dropdownOrder` field is removed from `heuristic_config`. Drive dropdown ordering is: pinned heuristics appear first in the order specified by the `pinnedHeuristics` array; remaining heuristics are ordered lexicographically by `nickname`, then by `heuristicId` as tiebreaker.
+**Rationale**: The ordinal system was fragile — it required manual coordination of ordinal values across all Drive types, had no collision prevention, and was difficult to reorder (changing one Drive's position required updating others). The pinned-heuristics approach is more intuitive: the Captain pins the most-used Drives to the top in a specific order, and everything else falls into a stable alphabetic order by its human-readable nickname. The `nickname` field gives teams a way to assign meaningful short names to heuristics (which have machine-readable `heuristicId` values defined in source code). This eliminates the collision problem entirely and makes reordering a simple array manipulation on a single field.
+**Affected requirements/design elements**: 06-REQ-007 amended (dropdownOrder replaced with nickname; ordering rule specified). 06-REQ-011 amended (pinnedHeuristics added to global_centaur_params). `heuristic_config` schema updated (dropdownOrder removed, nickname added). `global_centaur_params` schema updated (pinnedHeuristics added). 08-REQ-052 amended (new ordering scheme). 07-REQ-027, 07-REQ-028 updated (references to configured Drive ordering updated). Exported interface types updated.
 
 ---
 
@@ -533,7 +546,7 @@
 
 ---
 
-### 08-REVIEW-007: Timekeeper affordance availability when no timekeeper is assigned
+### 08-REVIEW-007: Timekeeper affordance availability when no timekeeper is assigned — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Requirements
@@ -545,6 +558,10 @@
 - C: Any team member acquires the affordances as a fallback.
 - D: The team is blocked from entering Centaur mode at all if no timekeeper is assigned.
 **Informal spec reference**: §7.5 ("Timekeeper controls (visible only to the designated timekeeper)"); §8.2.
+
+**Decision**: Moot — the timekeeper role has been eliminated per 05-REVIEW-014 resolution. All former timekeeper affordances (operator-mode toggle and turn-submit) are now Captain-only. The Captain is a structural role (`centaur_teams.captainUserId`) that always exists on every team, so the "no timekeeper assigned" edge case cannot arise. See amended §8.14 (now titled "Captain Controls") and 08-REQ-065 through 08-REQ-068.
+**Rationale**: The timekeeper was eliminated as unnecessary MVP complexity. The Captain, being structurally required on every team, inherits the capabilities without any gap in coverage.
+**Affected requirements/design elements**: 08-REQ-065, 08-REQ-066, 08-REQ-067, 08-REQ-068 amended (timekeeper → Captain). §8.14 retitled "Captain Controls". 02-REQ-043 amended (timekeeper assignment removed).
 
 ---
 
@@ -724,3 +741,14 @@
 - B: Add a "live games" section to the home view showing all platform-wide games in progress.
 - C: Add a filter to the Room Browser for "rooms with a game in progress."
 **Informal spec reference**: §8.1, §8.3.
+
+---
+
+### 08-REVIEW-021: Heuristic registry drift between server and team configuration
+
+**Type**: Gap
+**Phase**: Requirements
+**Context**: [06-REQ-005] states that heuristic defaults are per-CentaurTeam and that when a team replaces its Centaur Server, the new server inherits the existing heuristic defaults. [08-REQ-058] says the application shall not expose Drives whose types are not registered in the team's heuristic default configuration. However, there is no specification for what happens when the set of heuristic IDs registered in a team's Centaur Server source code diverges from the set of heuristic IDs in the team's `heuristic_config` table. This drift can occur in two directions: (a) the new server introduces heuristic IDs that have no `heuristic_config` entry (new Drives/Preferences added in code), and (b) the team's `heuristic_config` contains entries for heuristic IDs that the new server does not register (stale entries from a previous server). The current spec says stale entries are "ignored at runtime and may be cleaned up by the team" (06-REVIEW-001 resolution) but does not specify how the UI handles this — in particular, whether stale Drives appear in the dropdown, whether new (unconfigured) Drives are accessible, and whether the heuristic configuration page surfaces the mismatch.
+**Question**: How should the UI handle heuristic ID mismatches between the running server's registered heuristic set and the team's persisted `heuristic_config`?
+**Resolution direction**: Client-side filtering by registered heuristic IDs. The Snek Centaur Server's bot framework ([07]) shall expose the set of currently registered heuristic IDs (the IDs it recognises from its source code) via the same subscription channel used for bot-framework state ([08-REQ-003]). The UI shall use this set as a filter: (a) The Drive dropdown ([08-REQ-052]) shall show only Drive types whose `heuristicId` appears in both the server's registered set and the team's `heuristic_config`. Drives that exist in `heuristic_config` but are not registered by the current server are hidden from the dropdown (stale entries). (b) The heuristic configuration page ([08-REQ-014]) shall visually distinguish stale entries (present in config but not registered by the server) from active entries, and shall surface newly registered heuristic IDs that have no config entry so the Captain can configure them. (c) No automatic creation or deletion of `heuristic_config` rows shall occur — the Captain explicitly manages the configuration via the heuristic configuration page. This keeps the Centaur Server stateless with respect to team configuration while giving the UI enough information to present a clean, drift-aware interface.
+**Informal spec reference**: §7.1 (heuristic configuration); §7.6 (Drive dropdown).

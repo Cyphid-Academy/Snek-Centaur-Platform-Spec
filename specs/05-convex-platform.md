@@ -30,9 +30,9 @@
 
 **05-REQ-009**: Convex shall record the latest healthcheck status and timestamp for each Centaur Team's nominated server domain ([02-REQ-029]). The healthcheck status shall be queryable by team members and by any authenticated user viewing the team's profile. The healthcheck may be triggered on demand by team members or by the Room Lobby view. Convex shall not be required to poll server health automatically; on-demand and game-start-time checks are sufficient.
 
-**05-REQ-011**: Convex shall maintain a persistent record of Centaur Team membership associating each human member (an Operator) with the Centaur Team. Every team member is an Operator. Captain designation is not a per-member role but a structural property of the team itself: the `centaur_teams` record's `captainId` field identifies the unique Captain. There is no separate role assignment mechanism. *(Amended per 05-REVIEW-014 resolution: timekeeper role eliminated and merged into captain; roles array removed.)*
+**05-REQ-011**: Convex shall maintain a persistent record of Centaur Team membership associating each human member (an Operator) with the Centaur Team. Every team member is an Operator. Captain designation is not a per-member role but a structural property of the team itself: the `centaur_teams` record's `captainUserId` field identifies the unique Captain. There is no separate role assignment mechanism.
 
-**05-REQ-012**: Convex shall permit the Captain of a Centaur Team to add and remove human members from the team, and to transfer the Captain designation to another current team member (by updating `captainId`). All capabilities previously associated with the Timekeeper role (e.g., operator-mode toggling per [06]) are held by the Captain. These mutations shall be subject to the mid-game freeze of [03-REQ-046]. *(Amended per 05-REVIEW-014 resolution.)*
+**05-REQ-012**: Convex shall permit the Captain of a Centaur Team to add and remove human members from the team, and to transfer the Captain designation to another current team member (by updating `captainUserId`). The Captain holds all team-level operator authorities, including operator-mode toggling and turn submission per [06]. These mutations shall be subject to the mid-game freeze of [03-REQ-046].
 
 **05-REQ-013** *(negative)*: Convex shall reject any mutation to a Centaur Team's membership or Captain assignment while that team is participating in a game whose status is `playing`, consistent with [03-REQ-046]. During a tournament, this freeze extends for the entire tournament lifetime per [05-REQ-064].
 
@@ -93,7 +93,6 @@
 | Tournament rounds | Integer | 1 | ≥ 1 | Required when tournament mode on |
 | Tournament interlude | Seconds | 30 | ≥ 0 | Required when tournament mode on |
 | Scheduled start time | Datetime | now + 10 min | — | Required when tournament mode on |
-| Game privacy | Boolean | off | — | When on, replay within-turn actions are restricted per [05-REQ-067] |
 
 **05-REQ-024**: Convex shall associate a game-configuration parameter set with every game. The parameter set is editable while the game is in `not-started` status. When the game transitions to `playing`, the parameter set is frozen as an immutable snapshot for the remainder of the game's lifetime. *(Amended per 05-REVIEW-008 resolution: configuration lives exclusively on the game object; rooms do not hold configuration defaults.)*
 
@@ -235,27 +234,23 @@ The parameter split is a consequence of board generation moving to Convex (see [
 
 **05-REQ-065**: The platform shall recognize an **admin** role at the Convex level, distinct from Centaur Team membership. Admin is a platform-wide designation on the user record, not a per-team property. *(Amended per 05-REVIEW-014 resolution: simplified role language.)*
 
-**05-REQ-066**: Admin users shall be able to read all Centaur Team records, browse all games across all Centaur Teams, and view all replays regardless of team membership.
-
-**05-REQ-067**: Admin users shall be able to view any replay's full within-turn action log for all participating Centaur Teams, regardless of the game's privacy setting ([05-REQ-023] game privacy flag).
+**05-REQ-066**: Admin users shall be able to read all Centaur Team records, browse all games across all Centaur Teams, and view all replays regardless of team membership. Admin users shall additionally hold implicit coach permission for every Centaur Team per [05-REQ-067], granting them read-only visibility into the live state of any in-progress game.
 
 **05-REQ-068**: How admin accounts are designated (e.g., a list of admin emails in Convex environment config, a database flag on user records) is a design-phase decision. Requirements state only the capability, not the mechanism.
 
 ---
 
-### 5.12 Replay Access and Game Privacy
+### 5.12 Coach Role
 
-**05-REQ-069**: Each game record shall carry a **game privacy flag** (default: not private), set via the game configuration parameter "Game privacy" ([05-REQ-023]).
+**05-REQ-067**: Each Centaur Team shall be able to designate zero or more **coaches**. A coach is a registered user (per [05-REQ-004]) who is granted read-only visibility into the team's live game activity. Specifically, a coach of a team shall be authorised to read all Convex-resident Centaur state for that team's in-progress games (heuristic configuration, bot parameters, per-snake portfolio state, selection state, computed display state, action log, action log entries, stateMap snapshots, worst-case worlds, heuristic outputs) and to subscribe to that team's filtered SpacetimeDB views per [04] for any in-progress game in which the team is participating, on the same terms as a member of that team. A coach shall not be authorised to mutate any team-scoped or game-scoped state, shall not be authorised to act as an operator, and shall not appear in the team's roster for the purposes of game participation. Coach designation and removal shall be limited to the team's Captain. Admin users ([05-REQ-065]) shall be treated as implicit coaches of every Centaur Team and shall not need to be explicitly designated.
 
-**05-REQ-070**: For non-private games: any authenticated user may view the full replay including all Centaur Teams' within-turn actions (action log entries, stateMap snapshots, worst-case worlds, heuristic outputs).
+**05-REQ-068a**: Coach designations shall be stored on the Centaur Team record, distinct from the team's member roster. The set of coaches shall be observable to team members through the Team Management view.
 
-**05-REQ-071**: For private games: the replay viewer shall show within-turn events only for Centaur Teams the viewing user belonged to during that game (resolved from the game's participating-teams snapshot [05-REQ-029]). Board-level turn replay (board state, moves, outcomes, turn events) remains visible to all authenticated users.
-
-**05-REQ-072**: Admin users bypass game privacy restrictions entirely per [05-REQ-067].
+**05-REQ-068b** *(negative)*: Coach access shall not extend to finished games beyond what is already publicly available to all authenticated users per [05-REQ-066]. The coach role is meaningful only for the live-game visibility boundary; finished games are publicly readable irrespective of coach status.
 
 ---
 
-### 5.14 WASM Module Binary Storage
+### 5.13 WASM Module Binary Storage
 
 **05-REQ-073**: Convex shall store the current SpacetimeDB game module binary (a pre-compiled WebAssembly artifact) in Convex file storage. The binary shall be uploaded by the platform build pipeline at build or deploy time, targeting the Convex deployment instance appropriate for the current development or production environment. At game-creation time per [05-REQ-032], Convex shall retrieve the stored binary for inclusion in the SpacetimeDB provisioning request. The binary represents the compiled form of the SpacetimeDB game module defined by [04], which imports the shared engine codebase ([02-REQ-035]).
 
@@ -300,7 +295,6 @@ const gameConfigValidator = v.object({
   tournamentRounds: v.union(v.number(), v.null()),
   tournamentInterludeSec: v.union(v.number(), v.null()),
   scheduledStartTime: v.union(v.number(), v.null()),
-  gamePrivacy: v.boolean(),
 })
 
 export default defineSchema({
@@ -316,7 +310,8 @@ export default defineSchema({
   centaur_teams: defineTable({
     name: v.string(),
     displayColour: v.string(),
-    captainId: v.id("users"),
+    captainUserId: v.id("users"),
+    coachUserIds: v.array(v.id("users")),
     nominatedServerDomain: v.union(v.string(), v.null()),
     archived: v.boolean(),
     healthcheckStatus: v.union(
@@ -325,16 +320,16 @@ export default defineSchema({
     ),
     healthcheckTimestamp: v.union(v.number(), v.null()),
   })
-    .index("by_captain", ["captainId"])
+    .index("by_captain", ["captainUserId"])
     .index("by_archived", ["archived"]),
 
   centaur_team_members: defineTable({
     centaurTeamId: v.id("centaur_teams"),
-    userId: v.id("users"),
+    operatorUserId: v.id("users"),
   })
     .index("by_team", ["centaurTeamId"])
-    .index("by_user", ["userId"])
-    .index("by_team_user", ["centaurTeamId", "userId"]),
+    .index("by_user", ["operatorUserId"])
+    .index("by_team_user", ["centaurTeamId", "operatorUserId"]),
 
   rooms: defineTable({
     name: v.string(),
@@ -381,7 +376,7 @@ export default defineSchema({
     gameId: v.id("games"),
     centaurTeamId: v.id("centaur_teams"),
     rosterSnapshot: v.array(v.object({
-      userId: v.id("users"),
+      operatorUserId: v.id("users"),
       email: v.string(),
       isCaptain: v.boolean(),
     })),
@@ -707,7 +702,7 @@ action issueOperatorAccessToken(args: {
 Authorization:
 1. Resolve the caller's identity via `resolveIdentity()` from [03]; must be `kind: 'human'`.
 2. Load the game record; verify `status === "playing"`.
-3. Query `game_teams` for the game; verify the caller's `userId` appears in at least one team's `rosterSnapshot`.
+3. Query `game_teams` for the game; verify the caller's user `_id` appears as an `operatorUserId` in at least one team's `rosterSnapshot`.
 4. Determine the `sub` claim: `"operator:{users._id}"`.
 5. Call `issueSpacetimeDbAccessToken(gameId, sub)` from [03] and return the JWT.
 
@@ -741,7 +736,24 @@ Authorization:
 3. Determine the `sub` claim: `"spectator:{users._id}"`.
 4. Call `issueSpacetimeDbAccessToken(gameId, sub)` from [03] and return the JWT.
 
-All three endpoints refuse to issue tokens when `status === "finished"` per 05-REQ-035.
+**Coach access token** (for users with coach permission on a participating team per [05-REQ-067]):
+
+```typescript
+action issueCoachAccessToken(args: {
+  gameId: Id<"games">,
+  centaurTeamId: Id<"centaur_teams">
+}): string
+```
+
+Authorization:
+1. Resolve the caller's identity via `resolveIdentity()` from [03]; must be `kind: 'human'`.
+2. Load the game record; verify `status === "playing"`.
+3. Verify `isCoachOfTeam(callerUserId, centaurTeamId)` per §2.11; this returns true when the caller is in the team's `coachUserIds` or is an admin per `isAdmin(callerEmail)`. Reject if false.
+4. Query `game_teams` for the game; verify `centaurTeamId` is a participant.
+5. Determine the `sub` claim: `"coach:{users._id}:{centaur_teams._id}"`. The team-scoped `sub` lets the SpacetimeDB row-level filter ([04]) deliver the same per-team subscription view a member of that team would receive, while distinguishing coach connections from operator connections so SpacetimeDB rejects any reducer call from a coach `sub`.
+6. Call `issueSpacetimeDbAccessToken(gameId, sub)` from [03] and return the JWT.
+
+All four endpoints refuse to issue tokens when `status === "finished"` per 05-REQ-035.
 
 ---
 
@@ -770,7 +782,7 @@ The HTTP API is implemented as Convex HTTP actions at `CONVEX_SITE_URL/api/v1/*`
 | POST | `/api/v1/teams` | Create team: `{ name, displayColour, captainEmail }` |
 | PATCH | `/api/v1/teams/:id` | Update team: `{ name?, displayColour?, nominatedServerDomain? }` |
 | POST | `/api/v1/teams/:id/members` | Add member: `{ email, role }` |
-| DELETE | `/api/v1/teams/:id/members/:userId` | Remove member |
+| DELETE | `/api/v1/teams/:id/members/:operatorUserId` | Remove member |
 
 **Rooms** (`/api/v1/rooms`):
 
@@ -869,35 +881,31 @@ Satisfies 05-REQ-059, 05-REQ-060, 05-REQ-061, 05-REQ-062, 05-REQ-063, 05-REQ-064
 
 ---
 
-### 2.11 Admin Role and Game Privacy / Replay Access Control
+### 2.11 Admin Role, Coach Role, and Replay Access Control
 
-Satisfies 05-REQ-065, 05-REQ-066, 05-REQ-067, 05-REQ-068, 05-REQ-069, 05-REQ-070, 05-REQ-071, 05-REQ-072.
+Satisfies 05-REQ-065, 05-REQ-066, 05-REQ-067, 05-REQ-068, 05-REQ-068a, 05-REQ-068b.
 
 **Admin designation** (05-REQ-068): Admin is determined by `isAdmin(email)` from [03] §4.5, which reads the `ADMIN_EMAILS` environment variable. No admin flag is stored in the `users` table — admin status is derived from the env var on every check.
 
 **Admin enforcement**: Admin checks are applied in:
 - HTTP API handlers (Section 2.8): all requests require admin.
 - Team/game/replay queries: admin users bypass team-membership filters.
-- Replay access: admin users see all within-turn actions regardless of game privacy.
+- Live-game cross-team read paths: admin users are treated as implicit coaches of every team per [05-REQ-067].
 
-**Game privacy gating** (05-REQ-069–072):
-
-The game record's `config.gamePrivacy` field controls replay access. Privacy is enforced in the replay query interface:
+**Coach designation** (05-REQ-067, 05-REQ-068a): Each `centaur_teams` record carries a `coachUserIds: ReadonlyArray<Id<"users">>` field. The Captain mutation surface for coach designation is:
 
 ```typescript
-query getReplay(args: {
-  gameId: Id<"games">
-}): ReplayData
+mutation addCoach(args: { centaurTeamId: Id<"centaur_teams">, coachUserId: Id<"users"> }): void
+mutation removeCoach(args: { centaurTeamId: Id<"centaur_teams">, coachUserId: Id<"users"> }): void
 ```
 
-The query logic:
-1. Load the game record and its `game_teams` entries.
-2. Determine the viewing user's identity via `resolveIdentity()`.
-3. If the user is admin (`isAdmin(email)`): return full replay including all teams' within-turn actions from [06]'s `centaur_action_log`.
-4. If `config.gamePrivacy === false`: return full replay for all teams.
-5. If `config.gamePrivacy === true`: return the board-level replay (game log from STDB) for all users, but restrict within-turn Centaur action log data to only the teams the user was a member of (resolved from `game_teams.rosterSnapshot`).
+Both mutations are Captain-gated and reject otherwise. The set of coaches is observable to team members via the team query surface.
 
-The privacy gate applies only to Centaur subsystem data (action log, stateMap, heuristic outputs, etc.) from [06]. Board-level data (snake states, items, turn events) is always visible.
+**Coach enforcement**: A helper `isCoachOfTeam(userId, centaurTeamId)` returns `true` when (a) `userId` appears in the team's `coachUserIds` or (b) the user holding `userId` is an admin per `isAdmin(email)`. This helper is consulted by:
+- The live-game Convex read paths in [06] that gate cross-team visibility into in-progress games.
+- The SpacetimeDB token issuance in [03] when issuing per-team subscription tokens for live spectating in coach mode.
+
+**Replay access**: Replay access is fully public to authenticated users for all finished games — neither admin nor coach status is required to view any replay.
 
 ---
 
@@ -1014,7 +1022,7 @@ interface CentaurTeamDoc {
   readonly _id: Id<"centaur_teams">
   readonly name: string
   readonly displayColour: string
-  readonly captainId: Id<"users">
+  readonly captainUserId: Id<"users">
   readonly nominatedServerDomain: string | null
   readonly archived: boolean
   readonly healthcheckStatus: "healthy" | "unhealthy" | "unknown" | null
@@ -1024,7 +1032,7 @@ interface CentaurTeamDoc {
 interface CentaurTeamMemberDoc {
   readonly _id: Id<"centaur_team_members">
   readonly centaurTeamId: Id<"centaur_teams">
-  readonly userId: Id<"users">
+  readonly operatorUserId: Id<"users">
 }
 
 interface RoomDoc {
@@ -1064,7 +1072,7 @@ interface GameTeamDoc {
   readonly gameId: Id<"games">
   readonly centaurTeamId: Id<"centaur_teams">
   readonly rosterSnapshot: ReadonlyArray<{
-    readonly userId: Id<"users">
+    readonly operatorUserId: Id<"users">
     readonly email: string
     readonly isCaptain: boolean
   }>
@@ -1138,7 +1146,6 @@ interface GameConfig {
   readonly tournamentRounds: number | null
   readonly tournamentInterludeSec: number | null
   readonly scheduledStartTime: number | null
-  readonly gamePrivacy: boolean
 }
 ```
 
@@ -1171,14 +1178,21 @@ interface AccessTokenIssuanceContract {
     readonly precondition: "game status === 'playing'"
     readonly output: "RS256-signed JWT with sub: 'spectator:{users._id}'"
   }
+  readonly coachToken: {
+    readonly action: "issueCoachAccessToken"
+    readonly input: { readonly gameId: Id<"games">, readonly centaurTeamId: Id<"centaur_teams"> }
+    readonly auth: "Google OAuth (human identity), gated by isCoachOfTeam per [05-REQ-067]"
+    readonly precondition: "game status === 'playing' AND isCoachOfTeam(caller, centaurTeamId) AND centaurTeamId is a participant"
+    readonly output: "RS256-signed JWT with sub: 'coach:{users._id}:{centaur_teams._id}'"
+  }
 }
 ```
 
-**DOWNSTREAM IMPACT**: [08] must call `issueOperatorAccessToken` for operators connecting to SpacetimeDB during live gameplay, `issueBotAccessToken` for Snek Centaur Server bot connections (using the game credential received via invitation), and `issueSpectatorAccessToken` for spectator connections.
+**DOWNSTREAM IMPACT**: [08] must call `issueOperatorAccessToken` for operators connecting to SpacetimeDB during live gameplay, `issueBotAccessToken` for Snek Centaur Server bot connections (using the game credential received via invitation), `issueSpectatorAccessToken` for spectator connections, and `issueCoachAccessToken` for coach-mode connections per [08-REQ-052a].
 
 ### 3.5 Replay Query Interface
 
-Motivated by 05-REQ-040, 05-REQ-041, 05-REQ-070, 05-REQ-071, 05-REQ-072. Consumed by [08]'s replay viewer.
+Motivated by 05-REQ-040, 05-REQ-041. Consumed by [08]'s replay viewer.
 
 ```typescript
 interface ReplayQueryContract {
@@ -1206,11 +1220,11 @@ interface ReplayGameLog {
 }
 ```
 
-The `visibleTeamIds` field indicates which teams' within-turn Centaur action log data the current user may access. For non-private games: all participating team IDs. For private games: only the teams the user belonged to. For admins: all teams regardless of privacy.
+The `visibleTeamIds` field indicates which teams' within-turn Centaur action log data the current user may access. Replay access is fully public to all authenticated users, so this is always the full set of participating team IDs. The field is preserved in the contract to support future visibility refinements without breaking the consumer.
 
-The replay viewer in [08] uses `visibleTeamIds` to filter its queries to [06]'s `getActionLog` — only fetching action log entries for visible teams.
+The replay viewer in [08] uses `visibleTeamIds` to determine which teams' data to display.
 
-**DOWNSTREAM IMPACT**: [08]'s replay viewer must respect `visibleTeamIds` when querying [06]'s Centaur action log. Board-level replay data (`gameLog`) is always fully visible; privacy gating applies only to the Centaur subsystem's within-turn data.
+**DOWNSTREAM IMPACT**: [08]'s replay viewer uses `visibleTeamIds` when querying [06]'s `getActionLog`. For MVP, all teams are always visible. Board-level replay data (`gameLog`) is always fully visible.
 
 ### 3.6 Game-Start Orchestration Contract
 
@@ -1262,7 +1276,7 @@ interface HttpApiContract {
     readonly teams: readonly [
       "GET /teams", "GET /teams/:id", "POST /teams",
       "PATCH /teams/:id", "POST /teams/:id/members",
-      "DELETE /teams/:id/members/:userId"
+      "DELETE /teams/:id/members/:operatorUserId"
     ]
     readonly rooms: readonly [
       "GET /rooms", "GET /rooms/:id", "POST /rooms",
@@ -1295,9 +1309,9 @@ interface HttpApiContract {
 
 3. **[08] must implement the board preview and lock-in UX.** [08] calls `generateBoardPreview` to generate a preview from the current game config, and `lockBoardPreview`/`unlockBoardPreview` to manage the locked state. The game's `lockedBoardPreview` field provides the reactive state.
 
-4. **[08] must implement SpacetimeDB access token acquisition.** Operators call `issueOperatorAccessToken`, Snek Centaur Servers call `issueBotAccessToken` (using the game credential), and spectators call `issueSpectatorAccessToken`. All tokens have 2-hour expiry. Tokens are used to establish WebSocket connections to the STDB instance.
+4. **[08] must implement SpacetimeDB access token acquisition.** Operators call `issueOperatorAccessToken`, Snek Centaur Servers call `issueBotAccessToken` (using the game credential), spectators call `issueSpectatorAccessToken`, and coach-mode entry per [08-REQ-052a] calls `issueCoachAccessToken` with the team being coached. All tokens have 2-hour expiry. Tokens are used to establish WebSocket connections to the STDB instance.
 
-5. **[08] must respect replay privacy gating.** The `getReplay` query returns `visibleTeamIds` indicating which teams' Centaur action log data the user may see. [08]'s replay viewer must filter [06]'s `getActionLog` queries accordingly.
+5. **[08] must handle replay team visibility.** The `getReplay` query returns `visibleTeamIds` indicating which teams' Centaur action log data the user may see. All teams are always visible to any authenticated user — replay access is fully public.
 
 6. **[08] must implement the `/.well-known/snek-game-invite` endpoint.** The Snek Centaur Server receives `GameInvitationPayload` (Module 03 §4.7) and returns `GameInvitationResponse`. The reference implementation auto-accepts.
 
@@ -1446,9 +1460,9 @@ interface HttpApiContract {
 **Type**: Simplification
 **Phase**: Requirements / Design
 **Context**: The informal spec §7.5 designates a "timekeeper" role responsible for operator-mode toggling and turn submission. The original formal spec modeled this as a per-member role in a `roles` array alongside `captain`. During MVP specification, the timekeeper role was identified as unnecessary complexity: (a) no UI affordance for assigning the timekeeper role had been specified, (b) the capabilities assigned to the timekeeper (mode toggling, turn submission) are naturally captain-level actions, and (c) a separate role introduces edge cases around role assignment, freeze semantics, and authorization checking that add no value for the initial platform.
-**Decision**: Eliminate the timekeeper role entirely. Merge all timekeeper capabilities into the Captain. Captain designation is enforced structurally via `centaur_teams.captainId` (a reference to the captain's `users._id`), not via a per-member role field. The `centaur_team_members` table carries no role information — every member is an Operator. The `game_teams.rosterSnapshot` records each member's `isCaptain` boolean for historical attribution.
-**Rationale**: The Captain is already the team's designated authority for game-start readiness, roster management, and server domain nomination. Adding turn-submission and mode-toggling to the Captain's responsibilities is natural and avoids introducing a second privileged role that has no independent lifecycle management. If a future version needs a distinct timekeeper, it can be added as a new field on the team record (analogous to `captainId`) without schema migration of the membership table.
-**Affected requirements/design elements**: 05-REQ-011 amended (roles array removed; captain is structural property of team). 05-REQ-012 amended (timekeeper assignment removed; captain transfer via `captainId` update). 05-REQ-065 amended (simplified role language). Schema: `centaur_team_members.roles` field removed; `game_teams.rosterSnapshot` simplified to `{ userId, email, isCaptain }`. Module 06 amended: `toggleOperatorMode` authorization changed from timekeeper to captain; `turn_submitted` event attributed to captain; 06-REVIEW-008 context updated.
+**Decision**: Eliminate the timekeeper role entirely. Merge all timekeeper capabilities into the Captain. Captain designation is enforced structurally via `centaur_teams.captainUserId` (a reference to the captain's `users._id`), not via a per-member role field. The `centaur_team_members` table carries no role information — every member is an Operator. The `game_teams.rosterSnapshot` records each member's `isCaptain` boolean for historical attribution.
+**Rationale**: The Captain is already the team's designated authority for game-start readiness, roster management, and server domain nomination. Adding turn-submission and mode-toggling to the Captain's responsibilities is natural and avoids introducing a second privileged role that has no independent lifecycle management. If a future version needs a distinct timekeeper, it can be added as a new field on the team record (analogous to `captainUserId`) without schema migration of the membership table.
+**Affected requirements/design elements**: 05-REQ-011 amended (roles array removed; captain is structural property of team). 05-REQ-012 amended (timekeeper assignment removed; captain transfer via `captainUserId` update). 05-REQ-065 amended (simplified role language). Schema: `centaur_team_members.roles` field removed; `game_teams.rosterSnapshot` simplified to `{ operatorUserId, email, isCaptain }`. Module 06 amended: `toggleOperatorMode` authorization changed from timekeeper to captain; `turn_submitted` event attributed to captain; 06-REVIEW-008 context updated.
 
 ---
 

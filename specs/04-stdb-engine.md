@@ -54,9 +54,9 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-018**: The runtime shall implement a **`client_connected` lifecycle callback** that is invoked automatically by the SpacetimeDB runtime when a client establishes a WebSocket connection. The callback shall read the connecting client's JWT claims (previously validated by SpacetimeDB's built-in OIDC verification against the Convex platform's public key per [03] §3.17) and perform application-level validation per [03-REQ-021] and [03-REQ-023].
 
-**04-REQ-019**: The `client_connected` callback shall validate the JWT's `aud` claim against the game's unique identifier stored in `game_config` (Section 4.3), parse the `sub` claim via `parseSubClaim()` per [03] §4.4, validate the CentaurTeam binding against the participating roster, and derive an `agentId` via the JWT `sub` claim. Upon successful validation, the callback shall associate the calling connection's opaque connection identifier with the parsed CentaurTeam (except for spectator connections with `sub` prefix `"spectator:"`, which associate no CentaurTeam per [03-REQ-026]) and derived role (operator, bot, or spectator). This association shall persist for the lifetime of the connection, consistent with [03-REQ-021].
+**04-REQ-019**: The `client_connected` callback shall validate the JWT's `aud` claim against the game's unique identifier stored in `game_config` (Section 4.3), parse the `sub` claim via `parseSubClaim()` per [03] §4.4, validate the CentaurTeam binding against the participating roster, and derive an `agentId` via the JWT `sub` claim. Upon successful validation, the callback shall associate the calling connection's opaque connection identifier with the parsed CentaurTeam (except for spectator connections with `sub` prefix `"spectator:"`, which associate no CentaurTeam per [03-REQ-026]) and derived role (operator, bot, spectator, or coach). Coach connections (`sub` prefix `"coach:"` per [03-REQ-026a]) shall be associated with the team named in the embedded `centaurTeamId` for the purpose of read-side row-level filtering — coach views shall return the same per-team filtered subscription that a member of that team would receive — but shall be rejected by all reducers as ineligible to call any state-mutating reducer per [04-REQ-070]. This association shall persist for the lifetime of the connection, consistent with [03-REQ-021].
 
-**04-REQ-020**: The runtime shall maintain, for the full lifetime of the game instance, a **participant attribution record** (the `centaur_team_permissions` table) that maps each connection that has been successfully admitted via `client_connected` to an `Agent` value (as defined by [01]: `{kind: 'centaur_team', centaurTeamId}` for Centaur Server connections, or `{kind: 'operator', operatorId}` for operator connections). This mapping shall be derived from the JWT `sub` claim at connection time — the SpacetimeDB connection Identity is resolved to an `Agent` in the `client_connected` callback, not deferred to replay-export time. The record shall be retained for the full lifetime of the game instance. (Satisfies [03-REQ-044]. Resolves 04-REVIEW-011.)
+**04-REQ-020**: The runtime shall maintain, for the full lifetime of the game instance, a **participant attribution record** (the `centaur_team_permissions` table) that maps each connection that has been successfully admitted via `client_connected` to an `Agent` value (as defined by [01]: `{kind: 'centaur_team', centaurTeamId}` for Centaur Server connections, or `{kind: 'operator', operatorUserId}` for operator connections). This mapping shall be derived from the JWT `sub` claim at connection time — the SpacetimeDB connection Identity is resolved to an `Agent` in the `client_connected` callback, not deferred to replay-export time. The record shall be retained for the full lifetime of the game instance. (Satisfies [03-REQ-044]. Resolves 04-REVIEW-011.)
 
 **04-REQ-021**: The participant attribution record shall not be mutated or deleted when the underlying connection is closed, whether by network interruption, client shutdown, or reconnection. A client that reconnects shall obtain a fresh connection identifier and a fresh `Agent`-mapped attribution entry; previous entries remain intact so that historical `stagedBy: Agent` references from earlier turns remain resolvable without re-consulting the original connection Identity.
 
@@ -213,7 +213,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-069**: The runtime shall be deterministic with respect to its seeded randomness ([01-REQ-059], [01-REQ-060]): given identical initial seeds, configuration, and sequences of staged-move writes with identical timing, the resulting historical record shall be identical. (This enables test reproducibility and deterministic replay verification.)
 
-**04-REQ-070** *(negative)*: The runtime shall not treat any connection as having elevated privileges beyond those derived from its JWT `sub` claim role and CentaurTeam association. Captain status, timekeeper role, and other Convex-side operator role distinctions ([03], [08]) shall not be visible to or enforceable by the runtime.
+**04-REQ-070** *(negative)*: The runtime shall not treat any connection as having elevated privileges beyond those derived from its JWT `sub` claim role and CentaurTeam association. Captain status and other Convex-side operator role distinctions ([03], [08]) shall not be visible to or enforceable by the runtime. Spectator and coach connections (`sub` prefixes `"spectator:"` and `"coach:"`) shall be rejected by every state-mutating reducer; only `operator:` and `centaur:` connections may stage moves or otherwise mutate game state, and only on behalf of their bound team.
 
 ---
 
@@ -280,11 +280,11 @@ Written once by `initialize_game` [04-REQ-008, 04-REQ-014a].
 ```typescript
 interface CentaurTeamRosterRow {
   readonly centaurTeamId: string              // CentaurTeamId — Convex centaur_teams._id
-  readonly operatorIds: string            // JSON-serialized array of OperatorId strings for this CentaurTeam
+  readonly operatorUserIds: string            // JSON-serialized array of UserId strings for this CentaurTeam
 }
 ```
 
-Written by `initialize_game` from the participating-CentaurTeam roster [04-REQ-013, 04-REQ-014f, 03-REQ-039]. The `operatorIds` field enables `client_connected` to validate operator connections' CentaurTeam binding. The `centaurTeamId` is the Convex `centaur_teams._id`, passed through from the platform.
+Written by `initialize_game` from the participating-CentaurTeam roster [04-REQ-013, 04-REQ-014f, 03-REQ-039]. The `operatorUserIds` field enables `client_connected` to validate operator connections' CentaurTeam binding. The `centaurTeamId` is the Convex `centaur_teams._id`, passed through from the platform.
 
 #### 2.1.2 Append-Only Historical Tables
 
@@ -487,7 +487,7 @@ interface InitializeGameParams {
   }
   readonly teams: ReadonlyArray<{
     readonly centaurTeamId: string
-    readonly operatorIds: ReadonlyArray<string>
+    readonly operatorUserIds: ReadonlyArray<string>
   }>
 }
 ```
@@ -496,7 +496,7 @@ interface InitializeGameParams {
 
 1. **Re-invocation guard** [04-REQ-016]: Read `game_runtime.initialized`. If true, reject with error.
 2. **Structural validation** [04-REQ-017]: Validate the received state — correct board dimensions (`width * height === cells.length`), all cell values are valid `CellType` values, snake count matches `teams.length * snakesPerTeam`, all item positions are within board bounds with valid `ItemType` values, at least two CentaurTeams, each snake has body length ≥ 1. On validation failure, return a synchronous error to the caller (a coding-error check, not a user-facing failure path — see resolved 04-REVIEW-008).
-3. **Write static tables**: Insert `game_config` row (gameId, gameSeed, gameEndCallbackUrl, gameOutcomeCallbackToken, all dynamic gameplay params), `board_state` row (boardSize, width, height, cells), and one `centaur_team_roster` row per CentaurTeam (centaurTeamId, serialized operatorIds).
+3. **Write static tables**: Insert `game_config` row (gameId, gameSeed, gameEndCallbackUrl, gameOutcomeCallbackToken, all dynamic gameplay params), `board_state` row (boardSize, width, height, cells), and one `centaur_team_roster` row per CentaurTeam (centaurTeamId, serialized operatorUserIds).
 4. **Write turn-0 historical records** [04-REQ-014b, 04-REQ-014c, 04-REQ-014d]:
    - Insert one `snake_states` row per snake for turn 0, with denormalized `invulnerabilityLevel` and `visible` computed via the shared engine's `invulnerabilityLevel()` and `isVisible()` functions.
    - Insert one `item_lifetimes` row per initial item with `spawnTurn = 0` and `destroyedTurn = null`.
@@ -526,7 +526,7 @@ Invoked automatically by SpacetimeDB when a client establishes a WebSocket conne
 4. **Parse `sub` claim** [04-REQ-019]: Call `parseSubClaim(sub)` from the shared codebase ([03] §4.3). If unparseable, disconnect [04-REQ-022].
 5. **Validate CentaurTeam binding and derive agentId** [04-REQ-019]:
    - For `kind === 'centaur_team'`: Look up `parsed.centaurTeamId` in `centaur_team_roster`. If not found, disconnect [04-REQ-022]. The `agentId` is `parsed.centaurTeamId` (the Convex `centaur_teams._id`).
-   - For `kind === 'operator'`: Scan `centaur_team_roster` rows for a row whose `operatorIds` JSON array contains `parsed.operatorId`. If not found, disconnect [04-REQ-022]. The `agentId` is `parsed.operatorId` (the Convex `users._id`). Determine `centaurTeamId` from the matching `centaur_team_roster` row.
+   - For `kind === 'operator'`: Scan `centaur_team_roster` rows for a row whose `operatorUserIds` JSON array contains `parsed.operatorUserId`. If not found, disconnect [04-REQ-022]. The `agentId` is `parsed.operatorUserId` (the Convex `users._id`). Determine `centaurTeamId` from the matching `centaur_team_roster` row.
    - For `kind === 'spectator'`: No roster validation required [03-REQ-026]. `agentId` is null, `centaurTeamId` is null, role is `'spectator'`.
 6. **Write attribution record** [04-REQ-020]: Insert a `centaur_team_permissions` row with the connection's `Identity`, resolved `centaurTeamId`, `agentId`, `role`, and current timestamp.
 
@@ -1041,7 +1041,7 @@ interface InitializeGameParams {
   readonly dynamicGameplayParams: DynamicGameplayParams
   readonly teams: ReadonlyArray<{
     readonly centaurTeamId: string              // CentaurTeamId — Convex centaur_teams._id
-    readonly operatorIds: ReadonlyArray<string>  // OperatorId values for CentaurTeam members
+    readonly operatorUserIds: ReadonlyArray<string>  // UserId values for CentaurTeam members
   }>
 }
 
@@ -1379,7 +1379,7 @@ The WASM binary encapsulates the complete game engine module: all table schemas,
 - B: Verify now and restate if SpacetimeDB semantics are different.
 **Informal spec reference**: §10 `register`; [03-REQ-044].
 
-**Decision**: The unresolved question about SpacetimeDB Identity semantics is rendered moot by a higher-level architectural decision. Module 01 defines an `Agent` discriminated union (`{kind: 'centaur_team', centaurTeamId}` | `{kind: 'operator', operatorId}`) as the module-local concept for event attribution (per resolved 01-REVIEW-011). The SpacetimeDB connection Identity is now resolved to an `Agent` value **at connection time** (in the `client_connected` lifecycle callback, when JWT `sub` claim contents are available), not deferred to replay-export time. Consequently:
+**Decision**: The unresolved question about SpacetimeDB Identity semantics is rendered moot by a higher-level architectural decision. Module 01 defines an `Agent` discriminated union (`{kind: 'centaur_team', centaurTeamId}` | `{kind: 'operator', operatorUserId}`) as the module-local concept for event attribution (per resolved 01-REVIEW-011). The SpacetimeDB connection Identity is now resolved to an `Agent` value **at connection time** (in the `client_connected` lifecycle callback, when JWT `sub` claim contents are available), not deferred to replay-export time. Consequently:
 - `stagedBy` fields stored in STDB carry `Agent | null`, not opaque Identity.
 - The participant attribution record (04-REQ-020) maps each connection to its resolved `Agent` at connection time via `client_connected`.
 - 04-REQ-039's "no-interpretation" constraint has been rewritten: the runtime does perform the Identity→Agent mapping, but solely at connection time from JWT claims; no further interpretation occurs during turn resolution or replay export.

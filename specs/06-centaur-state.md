@@ -22,13 +22,13 @@
 
 **06-REQ-006**: For each registered Preference, the heuristic default configuration shall store: (a) whether the Preference is active on new snakes by default, and (b) its default portfolio weight.
 
-**06-REQ-007**: For each registered Drive type, the heuristic default configuration shall store: (a) its default portfolio weight when added to a snake, and (b) its ordinal position in the Drive dropdown presented to operators ([08]).
+**06-REQ-007**: For each registered Drive type, the heuristic default configuration shall store: (a) its default portfolio weight when added to a snake and (b) a human-readable `nickname` for UI display. Drive dropdown ordering is determined by a `pinnedHeuristics` array on `global_centaur_params` (see [06-REQ-011]): pinned heuristics appear first in pinned order; remaining heuristics are ordered lexicographically by `nickname`, with `heuristicId` as tiebreaker. *(Amended per 08-REVIEW-005 resolution: `dropdownOrder` replaced with `nickname` + pinned-heuristics scheme.)*
 
-**06-REQ-008**: The subsystem shall accept authorised mutations that create, update, or delete entries in the heuristic default configuration. Writes shall be permitted only to members of the owning Centaur Team.
+**06-REQ-008**: The subsystem shall accept authorised mutations that create, update, or delete entries in the heuristic default configuration. Writes shall be permitted only to the Captain of the owning Centaur Team. *(Amended per 08-REVIEW-001 resolution: team-scoped heuristic config writes are Captain-only.)*
 
 **06-REQ-009**: Edits to the heuristic default configuration shall not retroactively affect any game already in progress. Game-scoped per-snake portfolio state ([06-REQ-013]) is independent of the team's current defaults once the game has begun.
 
-**06-REQ-010** *(negative)*: No runtime other than the owning Centaur Team's members shall write to the heuristic default configuration. This is a restatement of [02-REQ-046] at the data layer and is enforced by function-contract checks in the subsystem.
+**06-REQ-010** *(negative)*: No runtime other than the Captain of the owning Centaur Team shall write to the heuristic default configuration. This is a restatement of [02-REQ-046] at the data layer and is enforced by function-contract checks in the subsystem. *(Amended per 08-REVIEW-001 resolution: team-scoped heuristic config writes are Captain-only, consistent with 06-REQ-008.)*
 
 ---
 
@@ -39,10 +39,11 @@
 - The default operator mode (Centaur or Automatic) that the live operator interface ([08]) starts a game in.
 - The automatic-mode time allocation applied to turns other than turn 0.
 - The automatic-mode time allocation applied to turn 0.
+- A `pinnedHeuristics` ordered array of heuristic IDs specifying Drive dropdown pinning order ([06-REQ-007]).
 
-These values serve as team-level defaults. At game start, they are copied into the game-scoped state record (`game_centaur_state`) and may be independently adjusted during the game without affecting the team defaults.
+These values serve as team-level defaults. At game start, they are copied into the game-scoped state record (`game_centaur_state`) and may be independently adjusted during the game without affecting the team defaults. *(Amended per 08-REVIEW-005 resolution: `pinnedHeuristics` added.)*
 
-**06-REQ-012** *(negative)*: No runtime other than the owning Centaur Team's members shall write to the bot parameter record. This is a restatement of [02-REQ-045] at the data layer and is enforced by function-contract checks in the subsystem.
+**06-REQ-012** *(negative)*: No runtime other than the Captain of the owning Centaur Team shall write to the bot parameter record. This is a restatement of [02-REQ-045] at the data layer and is enforced by function-contract checks in the subsystem. *(Amended per 08-REVIEW-001 resolution: bot parameter writes are Captain-only.)*
 
 ---
 
@@ -119,7 +120,7 @@ Initialisation shall use the team's heuristic default configuration as captured 
 - The Snek Centaur Server frontend to render the live operator interface and the replay viewer ([08]).
 - The bot framework on the Snek Centaur Server to read the effective heuristic configuration for each of its Centaur Team's snakes ([07]).
 
-Read access shall be scoped such that a member of one Centaur Team cannot read another team's heuristic default configuration, bot parameters, per-snake portfolio state, selection state, computed display state, or action log, except where an explicit cross-team read affordance is defined. Admin users ([05-REQ-065]) may read all Centaur Teams' state for administrative and replay purposes per [05-REQ-066] and [05-REQ-067]. No cross-team read affordance is defined for non-admin users. (See resolved 06-REVIEW-002.)
+Read access shall be scoped as follows. During a live (in-progress) game, a member of one Centaur Team cannot read another team's heuristic default configuration, bot parameters, per-snake portfolio state, selection state, computed display state, or action log, except via the coach affordance of [05-REQ-067] (a designated coach of a team has the same live-game read scope as a member of that team) or the admin affordance of [05-REQ-066] (admins are implicit coaches of every team). For finished games (replay), action log data is accessible to any authenticated user (see `getActionLog` authorization). Team-scoped configuration (heuristic defaults, bot parameters, global centaur params) remains restricted to team members and the team's coaches (and admins) regardless of game state. (See resolved 06-REVIEW-002.)
 
 ---
 
@@ -211,13 +212,13 @@ heuristic_config: defineTable({
   heuristicType: v.union(v.literal("drive"), v.literal("preference")),
   defaultWeight: v.number(),
   activeByDefault: v.union(v.boolean(), v.null()),
-  dropdownOrder: v.union(v.number(), v.null()),
+  nickname: v.union(v.string(), v.null()),
 }).index("by_team", ["centaurTeamId"])
 ```
 
 - `heuristicId` is a stable string identifier matching the source-code registration pattern used by each Centaur Server's Drive and Preference implementations. When a team replaces its Centaur Server, the new server's registered heuristic IDs link to the team's existing configuration entries; unrecognised IDs are ignored at runtime and may be cleaned up by the team. (See resolved 06-REVIEW-001.)
 - `activeByDefault` is non-null for Preferences (whether the Preference is active on new snakes by default) and null for Drives (Drives are never active by default).
-- `dropdownOrder` is non-null for Drives (ordinal position in the Drive dropdown) and null for Preferences.
+- `nickname` is a human-readable short name for UI display. Non-null for Drives (used in dropdown ordering); may be null for Preferences. *(Amended per 08-REVIEW-005 resolution: `dropdownOrder` replaced with `nickname`.)*
 
 **`global_centaur_params`** — Per-CentaurTeam bot parameter record [06-REQ-011]. One document per team.
 
@@ -228,6 +229,7 @@ global_centaur_params: defineTable({
   defaultOperatorMode: v.union(v.literal("centaur"), v.literal("automatic")),
   defaultAutomaticTimeAllocationMs: v.number(),
   defaultTurn0AutomaticTimeAllocationMs: v.number(),
+  pinnedHeuristics: v.array(v.string()),
 }).index("by_team", ["centaurTeamId"])
 ```
 
@@ -371,7 +373,7 @@ mutation upsertHeuristicConfig(args: {
   heuristicType: "drive" | "preference",
   defaultWeight: number,
   activeByDefault: boolean | null,
-  dropdownOrder: number | null,
+  nickname: string | null,
 }): void
 
 mutation deleteHeuristicConfig(args: {
@@ -380,7 +382,7 @@ mutation deleteHeuristicConfig(args: {
 }): void
 ```
 
-Authorization: caller must be a member of the specified CentaurTeam (Google OAuth identity → team membership check via `centaur_team_members`).
+Authorization: caller must be the Captain of the specified CentaurTeam (Google OAuth identity → team membership + captain check via `centaur_teams.captainUserId`). *(Amended per 08-REVIEW-001 resolution: Captain-only.)*
 
 **Global centaur params CRUD** — `upsertGlobalCentaurParams` [06-REQ-011, 06-REQ-012].
 
@@ -391,10 +393,11 @@ mutation upsertGlobalCentaurParams(args: {
   defaultOperatorMode: "centaur" | "automatic",
   defaultAutomaticTimeAllocationMs: number,
   defaultTurn0AutomaticTimeAllocationMs: number,
+  pinnedHeuristics: string[],
 }): void
 ```
 
-Authorization: caller must be a member of the specified CentaurTeam.
+Authorization: caller must be the Captain of the specified CentaurTeam. *(Amended per 08-REVIEW-001 resolution: Captain-only. Amended per 08-REVIEW-005 resolution: `pinnedHeuristics` added.)*
 
 #### 2.2.2 Game-Scoped Operator Mutations
 
@@ -488,7 +491,7 @@ mutation toggleOperatorMode(args: {
 }): void
 ```
 
-Authorization: caller must be the Captain of the CentaurTeam. Per informal spec §7.5, the toggle is available to the designated timekeeper; this capability has been merged into the Captain role per 05-REVIEW-014. The mutation verifies `centaur_teams.captainId === callerId`. Writes a `mode_toggled` action log entry transactionally. *(Amended per 05-REVIEW-014 resolution: timekeeper merged into captain.)*
+Authorization: caller must be the Captain of the CentaurTeam. The mutation verifies `centaur_teams.captainUserId === callerId`. Writes a `mode_toggled` action log entry transactionally.
 
 **Game-level parameter overrides** — `setGameParamOverrides`.
 
@@ -556,7 +559,7 @@ query getActionLog(args: {
 }): ReadonlyArray<CentaurActionLogDoc>
 ```
 
-Returns action log entries for the specified game and team, optionally filtered by turn range. Authorization: caller must be a member of the CentaurTeam, or an admin user. Replay viewers for non-own-team games are subject to privacy gating per [05-REQ-067].
+Returns action log entries for the specified game and team, optionally filtered by turn range. Authorization: during a live (in-progress) game, caller must be a member of the CentaurTeam, a designated coach of the CentaurTeam per [05-REQ-067] (admins are implicit coaches of every team), authenticated via game credential, or an admin user; for a finished game (replay), any authenticated user may query.
 
 **Team-scoped config queries** — `getHeuristicConfig`, `getGlobalCentaurParams`.
 
@@ -686,7 +689,7 @@ Each variant's `snakeId` field (where present) enables the `by_game_type_snake` 
 
 The `statemap_updated` event stores full snapshots (not deltas) per [06-REQ-028], so any recorded snapshot is independently interpretable.
 
-The `turn_submitted` event records when the team's Captain submits the turn, which is distinct from SpacetimeDB's `declare_turn_over` — the Centaur action log records the operator-interface-level intent, not the STDB confirmation. *(Amended per 05-REVIEW-014 resolution: timekeeper merged into captain.)*
+The `turn_submitted` event records when the team's Captain submits the turn, which is distinct from SpacetimeDB's `declare_turn_over` — the Centaur action log records the operator-interface-level intent, not the STDB confirmation.
 
 ---
 
@@ -779,7 +782,7 @@ export default defineSchema({
     heuristicType: v.union(v.literal("drive"), v.literal("preference")),
     defaultWeight: v.number(),
     activeByDefault: v.union(v.boolean(), v.null()),
-    dropdownOrder: v.union(v.number(), v.null()),
+    nickname: v.union(v.string(), v.null()),
   }).index("by_team", ["centaurTeamId"]),
 
   global_centaur_params: defineTable({
@@ -788,6 +791,7 @@ export default defineSchema({
     defaultOperatorMode: v.union(v.literal("centaur"), v.literal("automatic")),
     defaultAutomaticTimeAllocationMs: v.number(),
     defaultTurn0AutomaticTimeAllocationMs: v.number(),
+    pinnedHeuristics: v.array(v.string()),
   }).index("by_team", ["centaurTeamId"]),
 
   snake_operator_state: defineTable({
@@ -869,7 +873,7 @@ interface CentaurStateMutations {
     heuristicType: "drive" | "preference"
     defaultWeight: number
     activeByDefault: boolean | null
-    dropdownOrder: number | null
+    nickname: string | null
   }): void
 
   deleteHeuristicConfig(args: {
@@ -883,6 +887,7 @@ interface CentaurStateMutations {
     defaultOperatorMode: "centaur" | "automatic"
     defaultAutomaticTimeAllocationMs: number
     defaultTurn0AutomaticTimeAllocationMs: number
+    pinnedHeuristics: string[]
   }): void
 
   selectSnake(args: {
@@ -1119,7 +1124,7 @@ interface GameCentaurStateInitContract {
 - B: Allow cross-team reads in specific roles or lifecycle phases — specify which.
 **Informal spec reference**: N/A (gap).
 
-**Decision**: Option A — strict team-scoping, no cross-team reads except for admin users. Admin users ([05-REQ-065]) may read all Centaur Teams' state for administrative and replay purposes per [05-REQ-066] and [05-REQ-067].
+**Decision**: Option A — strict team-scoping, no cross-team reads except for admin users and designated coaches. Admin users ([05-REQ-065]) may read all Centaur Teams' state for administrative purposes per [05-REQ-066], and any user designated as a coach of a team per [05-REQ-067] may read that team's state on the same terms as a member.
 **Rationale**: Heuristic defaults and bot parameters are competitive information — a team's strategy configuration should not be visible to opponents. No use case in the informal spec motivates cross-team visibility for non-admin users. Admin users require cross-team reads for platform administration and unified replay viewing.
 **Affected requirements/design elements**: 06-REQ-032 updated with explicit admin exception and no-cross-team-reads language.
 
