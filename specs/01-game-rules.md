@@ -99,7 +99,7 @@ Because a snake holds at most one active effect per family (01-REQ-028), these c
 
 **01-REQ-025**: When a surviving snake's head occupies a food cell during turn resolution, the food item is consumed: `ateLastTurn` is set to `true` and `health` is restored to `MaxHealth`. Item collection (food or potions) is *not* a disruption — see 01-REQ-030.
 
-**01-REQ-026**: When one or more surviving snakes belonging to a team T collect one or more InvulnPotions during Phase 6 of the same turn, a single team rebuild of the `invulnerability` family is scheduled via `pendingEffects`: every alive member of T receives one pending effect `(family = invulnerability, state, expiryTurn = currentTurn + 3)` where `state = debuff` if the member collected a potion this turn and `state = buff` otherwise. This rebuild *replaces* any existing active or pending invulnerability-family effect on every member of T in Phase 9 (see 01-REQ-047 and 01-REQ-050). There is no stacking: a team holds at most one coherent rebuild of each family at any time, and re-collection refreshes rather than stacks.
+**01-REQ-026**: When one or more surviving snakes belonging to a team T collect one or more InvulnPotions during Phase 6 of the same turn, a single team rebuild of the `invulnerability` family is scheduled via `pendingEffects`: every alive member of T receives one pending effect `(family = invulnerability, state, expiryTurn = currentTurn + 3)` where `state = debuff` if the member collected a potion this turn and `state = buff` otherwise. This rebuild *replaces* any existing active or pending invulnerability-family effect on every member of T in Phase 9 (see 01-REQ-047 and 01-REQ-050).
 
 **01-REQ-027**: When one or more surviving snakes belonging to a team T collect one or more InvisPotions during Phase 6 of the same turn, a single team rebuild of the `invisibility` family is scheduled via `pendingEffects` analogously to 01-REQ-026: every alive member of T receives one pending `(family = invisibility, state, expiryTurn = currentTurn + 3)`, where `state = debuff` for snakes that collected this turn and `state = buff` otherwise. An invisibility-family `debuff` holder remains visible per 01-REQ-023. This rebuild replaces any existing active or pending invisibility-family effect on every member of T in Phase 9.
 
@@ -109,7 +109,7 @@ Because a snake holds at most one active effect per family (01-REQ-028), these c
 
 **01-REQ-028**: A snake holds at most one active effect per family and at most one pending effect per family. This is a structural invariant maintained by Phase 6's team rebuild semantics (01-REQ-047) and Phase 9's replace-semantics effect application (01-REQ-050); no phase inserts an effect of a family already present without first removing the prior one. A snake is the **active collector for family F** if and only if it currently holds an active effect `(family = F, state = debuff)`. A snake may simultaneously be the active collector for both families (one debuff of each); the two families are independent.
 
-**01-REQ-029**: *(Retired — the original stacking rule no longer applies. Stacking was removed in favour of the per-family single-effect invariant in 01-REQ-028. ID not reused.)*
+**01-REQ-029**: *(Retired. ID not reused. See resolved 01-REVIEW-015.)*
 
 **01-REQ-030**: A **disruption** is any of the following events experienced by a snake during turn resolution. This set is closed:
 - (a) Death from any cause
@@ -118,17 +118,17 @@ Because a snake holds at most one active effect per family (01-REQ-028), these c
 - (d) Receiving a body collision — a foreign snake's head enters a cell occupied by this snake's body
 - (e) Entering a hazard cell
 
-Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disruption. This decouples food consumption from the potion-cancellation mechanism and lets re-collection refresh effects voluntarily.
+Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disruption.
 
-**01-REQ-031**: If a snake that is the active collector for family F (01-REQ-028) suffers any disruption during turn resolution, a team-wide, family-scoped cancellation shall be scheduled for Phase 9: every active effect of family F shall be removed from every alive member of the collector's team. Other families are untouched. If the disrupted snake is the active collector for both families simultaneously, both families cancel independently. Because a debuff-holder is the only member whose disruption triggers cancellation, the collector functions as a deliberate "weak link" for the family's active buffs. Cancellation removes active effects only; pending effects scheduled by a Phase 6 rebuild in the same turn (01-REQ-047) are not discarded and proceed to application in Phase 9 step (b) normally. A same-turn re-collection therefore supersedes a disruption-triggered cancellation of the same family.
+**01-REQ-031**: If a snake that is the active collector for family F (01-REQ-028) suffers any disruption during turn resolution, a team-wide, family-scoped cancellation shall be scheduled for Phase 9: every active effect of family F shall be removed from every alive member of the collector's team. Other families are untouched. If the disrupted snake is the active collector for both families simultaneously, both families cancel independently. Cancellation removes active effects only; pending effects scheduled by a Phase 6 rebuild in the same turn (01-REQ-047) are not discarded and proceed to application in Phase 9 step (b) normally. A same-turn re-collection therefore supersedes a disruption-triggered cancellation of the same family.
 
-**01-REQ-032**: *(Retired — stacking is removed, so the "re-collection of same type" rule is moot. Re-collection is handled by the team-rebuild semantics in 01-REQ-026/027 and the replace-semantics of 01-REQ-047/050. ID not reused.)*
+**01-REQ-032**: *(Retired. ID not reused. See resolved 01-REVIEW-015.)*
 
 ---
 
 ### 1.6 Effect Immutability
 
-**01-REQ-033**: All reads of `activeEffects` (and the values derived from it — `invulnerabilityLevel` per 01-REQ-022 and `visible` per 01-REQ-023) during collision detection and disruption evaluation within a turn shall return each snake's start-of-turn values. Any effect gained, cancelled, or expired during the current turn's resolution shall have no observable influence on that turn's collision or disruption outcomes; such changes become observable no earlier than Phase 9 and are reflected in subsequent turns' start-of-turn values. This requirement is satisfied whether by an explicit start-of-turn snapshot or by an ordering discipline that defers all in-turn mutation of `activeEffects` until Phase 9; Module 01's design may choose either.
+**01-REQ-033**: All reads of `activeEffects` (and the values derived from it — `invulnerabilityLevel` per 01-REQ-022 and `visible` per 01-REQ-023) during collision detection and disruption evaluation within a turn shall return each snake's start-of-turn values. Any effect gained, cancelled, or expired during the current turn's resolution shall have no observable influence on that turn's collision or disruption outcomes; such changes become observable no earlier than Phase 9 and are reflected in subsequent turns' start-of-turn values. See resolved 01-REVIEW-014.
 
 ---
 
@@ -204,7 +204,7 @@ Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disrupti
 
 **01-REQ-052 (Phase 11 — Event Emission)**: Events shall be emitted for all significant outcomes of the current turn. The emitted event types are a closed set covering: snake movements (direction, growth, identity of who staged the move), deaths (cause, location), severing events, food consumption, potion collection (collector and affected teammates), food spawning, potion spawning, effect applications, and effect cancellations.
 
-**01-REQ-062 (Growth from food consumption)**: If a snake consumes food during turn T (via 01-REQ-025 or 01-REQ-046c) and is still alive at the start of turn T+1, the snake's body length (segment count) at the end of turn T+1's Phase 2 shall be exactly one greater than its body length at the end of turn T's Phase 2. A snake that dies before completing Phase 2 of turn T+1 does not grow. This requirement is the observable-behaviour contract of food consumption; the `ateLastTurn` tail-retention mechanism in 01-REQ-043 is the implementation mechanism by which it is satisfied. See resolved 01-REVIEW-008.
+**01-REQ-062 (Growth from food consumption)**: If a snake consumes food during turn T (via 01-REQ-025 or 01-REQ-046c) and is still alive at the start of turn T+1, the snake's body length (segment count) at the end of turn T+1's Phase 2 shall be exactly one greater than its body length at the end of turn T's Phase 2. A snake that dies before completing Phase 2 of turn T+1 does not grow. See resolved 01-REVIEW-008.
 
 ---
 
@@ -343,9 +343,9 @@ export interface ItemState {
 
 **Invisibility as information asymmetry only** (01-REQ-024). `isVisible(snake) = false` has no effect on collision detection, severing, health ticks, or any other turn-resolution mechanic — those phases operate against the full live state. The derived value exists exclusively to support filtering at the observation boundary: module 04's RLS rules use it to hide invisible snakes from opponent-team subscribers, and module 09's spectator views respect the same filter. The turn-resolution pseudocode in Section 2.8 never computes `isVisible(snake)` during Phases 1–8; it is only consulted by observation-boundary code.
 
-**Derived values, not stored fields** (01-REQ-022, 01-REQ-023). Earlier drafts of this module stored `invulnerabilityLevel` (a signed integer obtained by counting stacked buffs and debuffs) and `visible` on `SnakeState`. Under the current design stacking is removed, a snake holds at most one effect per family (01-REQ-028), and `invulnerabilityLevel ∈ {-1, 0, +1}` is a pure O(k) function over `activeEffects` where k ≤ 2. The function form is cheap, eliminates the denormalisation hazard (two fields that could drift from `activeEffects`), and removes a Phase 9 recomputation step. Consumers call the exported `invulnerabilityLevel(snake)` and `isVisible(snake)` helpers from Section 3.1.
+**Derived values, not stored fields** (01-REQ-022, 01-REQ-023). `invulnerabilityLevel ∈ {-1, 0, +1}` and `isVisible` are pure O(k) functions over `activeEffects` with k ≤ 2 per 01-REQ-028; consumers call the exported `invulnerabilityLevel(snake)` and `isVisible(snake)` helpers from Section 3.1. See resolved **01-REVIEW-014** and **01-REVIEW-015**.
 
-**Invisibility collector remains visible** (01-REQ-023). The active collector of the invisibility family holds `(invisibility, debuff)` and is therefore `isVisible(snake) = true`. Their teammates who hold `(invisibility, buff)` are invisible to opponents. The collector is the visible "weak link" opponents can target to disrupt their team's invisibility — this is the whole point of the collector role and is symmetric to the invulnerability collector's `invulnerabilityLevel = -1` vulnerability. An earlier draft of 01-REQ-023 incorrectly made the collector invisible; this was a formal-spec bug inconsistent with always-intended behaviour and is fixed by the current 01-REQ-023 text (see resolved **01-REVIEW-016**).
+**Invisibility collector remains visible** (01-REQ-023). The active collector of the invisibility family holds `(invisibility, debuff)` and is therefore `isVisible(snake) = true`. Their teammates who hold `(invisibility, buff)` are invisible to opponents. The collector is the visible "weak link" opponents can target to disrupt their team's invisibility — this is the whole point of the collector role and is symmetric to the invulnerability collector's `invulnerabilityLevel = -1` vulnerability. See resolved **01-REVIEW-016**.
 
 ### 2.2 Board Geometry
 
@@ -452,8 +452,6 @@ Implements 01-REQ-010 through 01-REQ-017 and 01-REQ-061. A single *attempt* runs
 2. Sample `hazardCount` inner cells uniformly without replacement. Mark them `CellType.Hazard`.
 3. Run BFS from any non-hazard inner cell over the graph of non-hazard, non-wall inner cells (4-connectivity). If BFS does not visit every non-hazard inner cell, the attempt **fails** with code `HAZARD_CONNECTIVITY`.
 
-**Alternative considered**: constraint-aware placement (reject any hazard whose removal would disconnect the remainder). Rejected because the bounded retry in 01-REQ-061 handles the failure case cleanly and sample-then-check is simpler.
-
 **Stage 2 — Fertile tiles** (01-REQ-012, 01-REQ-013): only runs if `config.fertileGround.enabled`. Per Section 2.5 below. Marks selected cells `CellType.Fertile`. A fertile cell is never simultaneously a hazard because the candidate pool excludes hazards.
 
 **Stage 3 — Territory angular offset** (01-REQ-014). Using `subSeed(attemptSeed, "territory-angle")`: sample `theta0 ∈ [0, 2π)` uniformly. For an N-team game the sector boundaries are `theta0 + k·(2π/N)` for `k = 0..N-1`. Each inner cell is assigned to the sector containing the point `(x + 0.5, y + 0.5)` (the cell centre). The "overlaps most" phrasing of 01-REQ-014 simplifies here to "sector containing the centre" because sectors have straight-line boundaries and inner cells are unit squares — the sector containing the centre is always the one with the largest overlap. Boundary-centre ties (measure-zero but possible under exact rational arithmetic) are broken using `subSeed(attemptSeed, "territory-tiebreak")`.
@@ -536,7 +534,7 @@ Implements 01-REQ-018 through 01-REQ-021.
 
 Implements 01-REQ-022, 01-REQ-023, 01-REQ-028, 01-REQ-031, 01-REQ-033, 01-REQ-050, and the expiry semantics resolved in 01-REVIEW-003.
 
-**Effect model: symmetric buff/debuff states, no stacking**. Each potion family (`invulnerability`, `invisibility`) has two possible states on a snake: `buff` or `debuff`. A snake holds at most one active effect per family (01-REQ-028). The two families are independent; a snake can hold any combination of `{none, buff, debuff} × {none, buff, debuff}` across the two families. Effects are stored as members of an `activeEffects` collection on `SnakeState`, with each member carrying `(family, state, expiryTurn)`. The flat collection form is retained (rather than per-family slot fields) so that iteration over all current effects is uniform.
+**Effect model: symmetric buff/debuff states**. Each potion family (`invulnerability`, `invisibility`) has two possible states on a snake: `buff` or `debuff`. A snake holds at most one active effect per family (01-REQ-028). The two families are independent; a snake can hold any combination of `{none, buff, debuff} × {none, buff, debuff}` across the two families. Effects are stored as members of an `activeEffects` collection on `SnakeState`, with each member carrying `(family, state, expiryTurn)`. The flat collection form supports uniform iteration over all current effects. See resolved **01-REVIEW-015**.
 
 The per-family single-effect invariant is maintained by two mechanisms:
 
@@ -558,7 +556,7 @@ isVisible(snake) =
 
 These are the *only* reads used by collision resolution in Phase 3. No cached fields, no denormalisation.
 
-**Effect immutability as a structural invariant** (01-REQ-033). The design satisfies 01-REQ-033 structurally — by ordering the pipeline such that no phase between start-of-turn and Phase 9 writes to `activeEffects` — rather than by taking an explicit snapshot. The live `activeEffects` list therefore equals its start-of-turn value throughout Phases 1–8 by invariant. The derived `invulnerabilityLevel(snake)` and `isVisible(snake)` helpers called during Phase 3 and Phase 9a consequently return start-of-turn values by construction.
+**Effect immutability as a structural invariant** (01-REQ-033). The design satisfies 01-REQ-033 structurally: no phase between start-of-turn and Phase 9 writes to `activeEffects`. The live `activeEffects` list therefore equals its start-of-turn value throughout Phases 1–8 by invariant. The derived `invulnerabilityLevel(snake)` and `isVisible(snake)` helpers called during Phase 3 and Phase 9a consequently return start-of-turn values by construction. See resolved **01-REVIEW-014**.
 
 **Correctness-critical invariant**:
 
@@ -580,7 +578,7 @@ Future edits that need to mutate effect state mid-turn must either (a) be placed
 - Phase 9a applies the cancellation before the rebuild/expiry passes: every active family-F effect is removed from every alive member of the team, and every pending family-F entry scheduled this turn for that team is discarded. Other families are untouched.
 - If the disrupted snake holds both `(invulnerability, debuff)` and `(invisibility, debuff)` simultaneously, both families are cancelled independently.
 
-The reason per-source attribution (what the earlier-draft `sourceCollectorSnakeId` field was for) is no longer needed: stacking is gone, so within a single family a team only ever has one coherent rebuild at a time, and the rebuild's "owner" is whoever holds the debuff. Disrupting the debuff-holder cancels the rebuild in its entirety. There is no "other contribution to preserve".
+See resolved **01-REVIEW-010** and **01-REVIEW-015** for the rationale behind the family-scoped, attribution-free cancellation model.
 
 **Disruption buffer**. Phases 3, 5, and 6 append to a `disruptionBuffer: DisruptionRecord[]`:
 
@@ -602,9 +600,9 @@ Implements 01-REQ-041 through 01-REQ-052 and 01-REQ-062. Pseudocode below; `stat
 
 ```text
 function resolveTurn(state, T, turnSeed):
-  # No explicit effect snapshot: per Section 2.7's structural invariant,
-  # live `activeEffects` / `invulnerabilityLevel` / `visible` are equal to
-  # their start-of-turn values throughout Phases 1–8.
+  # Per Section 2.7's structural invariant, `activeEffects` (and the
+  # derived `invulnerabilityLevel` / `isVisible`) equal their
+  # start-of-turn values throughout Phases 1–8.
   disruptions = []
 
   # ---------- Phase 1: Move Collection (01-REQ-042) ----------
@@ -732,12 +730,9 @@ function resolveTurn(state, T, turnSeed):
     expiry = T + 3
     for mate in aliveMembersOf(state, centaurTeamId):
       state_ = (mate.snakeId in collectorIds) ? 'debuff' : 'buff'
-      # Replace any existing pending entry of this family on `mate` (from a
-      # prior collection earlier in the same Phase 6 iteration, though this
-      # only matters if the code structure were different — with the two-pass
-      # structure above, `pendingEffects` is written exactly once per mate
-      # per family per turn). The "replace on apply" marker is what matters:
-      # Phase 9b removes any active-family entry on `mate` before applying.
+      # `pendingEffects` is written exactly once per mate per family per
+      # turn by the two-pass structure above. Phase 9b removes any
+      # active-family entry on `mate` before applying the pending one.
       removePendingOfFamily(mate, family)
       pushPending(mate, { family, state: state_, expiryTurn: expiry })
 
@@ -789,10 +784,6 @@ function resolveTurn(state, T, turnSeed):
   # 9c. Expire effects whose last-active turn has been reached.
   for snake in allSnakes(state):
     snake.activeEffects = snake.activeEffects.filter(e => T < e.expiryTurn)
-
-  # No 9d. `invulnerabilityLevel` and `isVisible` are derived values
-  # computed on demand by downstream consumers; there are no cached fields
-  # to recompute.
 
   # ---------- Phase 10: Win Condition Check (01-REQ-051) ----------
   outcome = checkWinConditions(state, T)
@@ -960,7 +951,7 @@ export type TurnEvent =
 
 **Ordering**: events are emitted in phase order (1 → 11), and within a phase in ascending `snakeId` order. This determinism lets replay viewers render without re-sorting.
 
-**Scoping note**. Module 01 owns the *closed enumeration of event kinds and their payload shapes* because these trace directly from turn-resolution semantics (01-REQ-052). Module 04 owns the storage representation (append-only `turn_events` table, keyed by `(turn, eventIndex)`). The informal spec §14 uses `stagedBy: Identity` for `snake_moved`; this design uses the module-01-local `Agent` discriminated union (Section 3.1) because module 01 has no dependency on module 03 and must not reference its `Identity` type directly. Downstream modules that see a concrete identity type (most notably module 04's SpacetimeDB `Identity`) are responsible for mapping that identity to an `Agent` variant before passing staged moves into `resolveTurn`. This resolution is recorded in 01-REVIEW-011.
+**Scoping note**. Module 01 owns the *closed enumeration of event kinds and their payload shapes* because these trace directly from turn-resolution semantics (01-REQ-052). Module 04 owns the storage representation (append-only `turn_events` table, keyed by `(turn, eventIndex)`). Downstream modules that see a concrete identity type (most notably module 04's SpacetimeDB `Identity`) are responsible for mapping that identity to an `Agent` variant before passing staged moves into `resolveTurn`. See resolved **01-REVIEW-011**.
 
 ---
 
@@ -1216,7 +1207,7 @@ export interface GameState {
 
 1. **Event schema is closed.** Modules 04, 08, 09 can rely on the nine `TurnEvent` kinds being exhaustive. Adding a new kind requires a coordinated change across every consumer and a module-01 version bump.
 
-2. **Effect schema is `PotionEffect { family, state, expiryTurn }`, no source attribution.** Module 04's schema must carry exactly these three fields. Earlier drafts included a `sourceCollectorSnakeId` attribution field to support per-stack cancellation under unbounded stacking; stacking is removed and attribution is no longer needed (see resolved 01-REVIEW-010 and 01-REVIEW-015). Adding back per-stack attribution would require reintroducing stacking.
+2. **Effect schema is `PotionEffect { family, state, expiryTurn }`, no source attribution.** Module 04's schema must carry exactly these three fields. Adding back per-stack attribution would require reintroducing stacking. See resolved 01-REVIEW-010 and 01-REVIEW-015.
 
 3. **Board cell encoding is specified, not delegated.** Flat `ReadonlyArray<CellType>` with `y * width + x` indexing is fixed here so that the shared engine codebase (per module 02's principles) is binary-compatible across SpacetimeDB, Convex, and the web clients. Downstream modules must not redefine this.
 
@@ -1228,7 +1219,7 @@ export interface GameState {
 
 7. **Phase 4 is a no-op mutation phase.** Downstream event consumers should not expect any state changes in Phase 4 beyond the disruption buffer accumulation that already happened in Phase 3. Event emission in Phase 11 can skip Phase 4 entirely.
 
-8. **`GameState` aggregate shape is now exported** (see resolved 01-REVIEW-013). The canonical shape is `{ board: Board, snakes: ReadonlyArray<SnakeState>, items: ReadonlyArray<ItemState>, clocks: ReadonlyArray<CentaurTeamClockState> }`. Module 04 must assemble this shape from its SpacetimeDB tables when calling `resolveTurn` and must destructure it from the result. Module 07 may continue to consume components individually through its simulation layer but should reference the exported `GameState` type for structural alignment.
+8. **`GameState` aggregate shape is exported** (see resolved 01-REVIEW-013). The canonical shape is `{ board: Board, snakes: ReadonlyArray<SnakeState>, items: ReadonlyArray<ItemState>, clocks: ReadonlyArray<CentaurTeamClockState> }`. Module 04 must assemble this shape from its SpacetimeDB tables when calling `resolveTurn` and must destructure it from the result. Module 07 may continue to consume components individually through its simulation layer but should reference the exported `GameState` type for structural alignment.
 
 9. **Effect-state immutability is a structural invariant, not a snapshot.** 01-REQ-033 is satisfied by the ordering discipline described in Section 2.7: no code path between start-of-turn and Phase 9 writes to `snake.activeEffects`. Because `invulnerabilityLevel(snake)` and `isVisible(snake)` are pure functions over `activeEffects`, they inherit the invariant automatically. Any future phase that needs to mutate effect state mid-turn must either (a) be placed at or after Phase 9, or (b) reintroduce an explicit snapshot taken at the start of Phase 1 and reroute pre-mutation reads through it. Downstream modules that implement `resolveTurn` must preserve this invariant verbatim; violating it silently breaks disruption cancellation semantics.
 

@@ -4,6 +4,25 @@ All AI agent context lives in this file. Both Claude and Replit Agent should rea
 
 > **Essential reading:** Before doing any spec work in this repo, read **[`SPEC-INSTRUCTIONS.md`](SPEC-INSTRUCTIONS.md)** in full. It defines the modular authoring process, phase gates, review protocol, and module dependency graph that govern all specification work. Every conversation that touches spec content must follow those rules.
 
+## Spec Body vs REVIEW Items — No Journey Narration
+
+The Requirements, Design, and Exported Interfaces sections of every spec module describe **only the current correct behaviour of the system**. They must not include the *semantic content* of states the spec used to be in: what an earlier draft said, what mechanism was considered and dropped, what field a removed type used to carry, what option among several was rejected. Inlining that content bloats the spec and — more importantly — primes readers (human or AI) with directions that are no longer the plan, fraying focus and inviting accidental regression to settled-and-rejected calls. The body must read as if the current text were the first and only version ever written.
+
+Journey content — prior drafts, removed mechanisms, "we changed this because…" rationale, and the option-space behind a decision — belongs strictly in **resolved REVIEW items**, whose `Context` / `Question` / `Options` / `Decision` / `Rationale` format (see `SPEC-INSTRUCTIONS.md` §REVIEW Item Format / Resolution) exists precisely to carry it. Resolved REVIEW items will eventually be migrated out of the module files entirely so that they likewise do not pollute attention unless deliberately retrieved.
+
+**Opaque pointers into resolved REVIEW items are allowed and valuable.** A trailing `(see resolved [MODULE-ID]-REVIEW-NNN)` or `See resolved [MODULE-ID]-REVIEW-NNN.` next to the current rule it settles is good practice: the pointer is a stable, low-attention reference that lets a curious reader fetch the journey on demand without forcing it into every reader's working memory. The rule is **the pointer is fine; the prior content the pointer would otherwise replace is not**. A clause that only *names* a resolved REVIEW item is allowed; a clause that *summarises* what the rejected option was, what the earlier draft said, or why the change was made is not (the REVIEW item itself carries that).
+
+Concrete anti-patterns the agent must refuse to write into a module body:
+
+- **Retired-with-explanation requirements**: `*(Retired — the original X rule no longer applies because Y was removed in favour of Z. ID not reused.)*`. Use `*(Retired. ID not reused. See resolved [MODULE-ID]-REVIEW-NNN.)*` and let the REVIEW item carry the substance.
+- **Earlier-draft framing inside body text**: phrases of the form *"earlier drafts of …"*, *"previously …"*, *"formerly …"*, *"no longer needed"*, *"has been refined"*, *"is now exported"*, *"is now …"*, *"this replaces what we had before"*, *"originally we …"* — all narrate change rather than state current behaviour.
+- **Narration of removed mechanisms**: paragraphs explaining what an abandoned field, type, structure, or phase used to do and why it is gone (e.g. "the reason per-source attribution is no longer needed is …"). The current rule stands on its own; the absence needs no obituary.
+- **Anti-explanations**: `"There is no stacking …"`, `"No Phase 9d. … there are no cached fields to recompute"`, `"This is not a snapshot"`. State what *is*; do not enumerate what *isn't* in order to head off a misreading rooted in a prior draft.
+- **In-body enumeration of rejected alternatives**: paragraphs of the form *"Alternative considered: X. Rejected because Y."* or *"Option A would have done X; we chose B instead."* — option-space narration belongs in the REVIEW item's `Options` and `Rationale` fields. An opaque pointer to the REVIEW item replaces the in-body enumeration cleanly.
+- **Justifications inside requirements/design that belong in a REVIEW item's Rationale**: tail clauses of the form *"… because of X consideration that motivated the choice"*, *"… so that future editors don't think Y"*, *"… this is the right level of complexity"*. If the rationale is the journey of the decision, it belongs in the REVIEW item.
+
+Pure forward-looking constraints on future editors (e.g. "any future phase that needs to mutate effect state mid-turn must either … or …") and present-tense justifications that are load-bearing for regression prevention (e.g. "`ceil` rather than `floor` so that `D = 1` still yields one fertile cell") are **not** journey narration and are appropriate in the body. The test is whether the clause describes the current/future contract or recounts the *content* of how the past contract differed.
+
 ## Project Overview
 
 This repository contains the **formal specification** for the Team Snek Centaur Platform — a team-based multiplayer snake game designed for Cyphid Academy's Battle Bunker educational program. Players collaborate with an AI "Centaur Server" that controls their team's snakes by default, with human operators selectively overriding individual snakes.
