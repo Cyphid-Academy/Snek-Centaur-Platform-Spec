@@ -459,6 +459,706 @@
 
 ---
 
+## Design
+
+### 2.1 Application Topology, Tech Stack, and Repository Layout
+
+The application is a SvelteKit project running under the Node.js adapter inside the Snek Centaur Server's single Node process, co-resident with the bot framework runtime ([07] §2.1). Co-residency is required because the `/.well-known/snek-game-invite` endpoint (08-REQ-005) hands the received per-Centaur-Team game credential directly to the in-process bot framework session manager (08-REQ-003, 08-REQ-005); a separate process boundary would require an out-of-band channel that the architecture explicitly avoids. *(See [02] §2.16a; consistent with 02-REQ-030 / 02-REQ-032a.)*
+
+**Stack**:
+- **Framework**: Svelte 5 + SvelteKit (Node adapter).
+- **Component library**: shadcn-svelte (used for primitives only; all interaction logic lives in application components, keeping the surface forks may safely replace minimal).
+- **Convex client**: `convex-svelte` for reactive queries and mutations against [05]'s and [06]'s function contract surfaces.
+- **SpacetimeDB client**: the SpacetimeDB browser TypeScript client (08-REQ-003), used for live game subscriptions and live spectating.
+- **Presence**: `@convex-dev/presence` for operator presence and per-operator ready-state visibility (08-REQ-035, 08-REVIEW-004).
+- **Heuristic registry**: build-time import of `HEURISTIC_REGISTRY` from `@team-snek/heuristics` ([07] §2.3, [02] §2.16a), satisfying 08-REVIEW-021's drift-elimination property at the build-artifact level.
+- **Library dependency**: a published library package providing the data-source abstraction and other library APIs (§2.4 below). This module's source canonicalises the package name to `@snek-centaur/server-lib` consistent with [02] §2.13 / §2.16a; 08-REQ-076 names the same artifact `@team-snek/centaur-lib` and a new REVIEW item (08-REVIEW-022) is filed to flag the inconsistency for the human resolution path. The two names refer to one and the same artifact; nothing in this design depends on which name wins.
+
+**Repository topology**: the application is delivered as a separate forkable reference implementation repository per 02-REQ-032a / 08-REQ-079, **not** a workspace package within the platform monorepo. Teams obtain it by forking; their fork installs `@snek-centaur/server-lib`, `@snek-centaur/engine`, and `@team-snek/heuristics` from the published registry. The reference repository's directory layout follows SvelteKit conventions:
+
+```
+src/
+  app.html
+  app.d.ts
+  hooks.server.ts                      # Convex Auth session hooks
+  routes/                              # see §2.2 routing topology
+  lib/
+    server/                            # server-only modules (invitation endpoint, healthcheck)
+      invitation.ts                    # /.well-known/snek-game-invite handler (§2.6)
+      bot-session-manager.ts           # in-process handoff to @snek-centaur/server-lib
+    components/                        # board renderer, header, decision table, etc.
+    data-source/                       # consumers of @snek-centaur/server-lib's data-source API
+    presence/                          # @convex-dev/presence integration (§2.5)
+    colour/                            # per-operator stable-colour function (§3.3)
+static/
+  .well-known/                         # served as static assets if not generated at request time
+```
+
+Forks are expected to modify this layout freely (08-REQ-079, 08-REQ-080a). The load-bearing contract teams must not break is the data-source abstraction surface (§2.4 / §3.2) and the invitation endpoint contract (§2.6 / §3.1).
+
+---
+
+### 2.2 Routing and Layout Hierarchy
+
+The route topology partitions surfaces by which authority gates them (08-REQ-002, 08-REQ-006, 08-REQ-009c, 08-REQ-010, 08-REQ-013):
+
+```
+/                                       # home view (§8.3a) — auth required
+/sign-in                                # sign-in page (08-REQ-002)
+/sign-out                               # sign-out endpoint (08-REQ-009b)
+
+/leaderboard                            # global leaderboard (§8.19) — auth required (08-REQ-094f)
+/teams                                  # teams browser (§8.5a) — auth required
+/teams/[teamId]                         # team profile (§8.18a) — auth required
+/teams/[teamId]/manage                  # team management (§8.5b) — member-gated, Captain affordances inside
+/teams/[teamId]/heuristic-config        # heuristic config (§8.4) — member-gated; Captain edits, others read-only
+/teams/[teamId]/bot-params              # bot parameters (§8.5) — member-gated; Captain edits, others read-only
+/teams/[teamId]/games                   # game history for the team (§8.7) — member of team or platform admin
+/teams/[teamId]/live                    # live operator interface for the team's current playing game (§§8.9–8.14)
+
+/rooms                                  # room browser (§8.6) — auth required
+/rooms/[roomId]                         # room lobby (§8.8) — auth required; affordances scoped per role
+
+/games/[gameId]/spectate                # live spectating view (§8.16) — auth required
+/games/[gameId]/replay                  # unified replay viewer (§8.15) — auth required
+/games/[gameId]/coach/[teamId]          # coach mode for a designated team (§8.16/§2.16) — coach or admin
+
+/users/[userId]                         # player profile (§8.18) — auth required
+
+/api-keys                               # API key management (§8.20) — auth required, scoped to caller
+
+/admin                                  # admin landing (§8.21) — admin-only
+```
+
+**Layout hierarchy**: a single root layout enforces authentication via a `+layout.server.ts` load function that resolves the OAuth session against Convex and exposes the `user` record (08-REQ-007, 08-REQ-006); on absence it redirects unauthenticated callers to `/sign-in` for every non-exempt route (the exempt set is `/sign-in`, `/sign-out`, and the static asset surface; per 08-REVIEW-016 there is no public surface beyond the sign-in page). `/teams/[teamId]/...` is wrapped in a team-scoped layout that resolves the `team` record (and the caller's role on it: Captain | member | coach | admin | none) from Convex; child pages render gated affordances by branching on this role rather than by re-querying. `/games/[gameId]/...` is wrapped in a game-scoped layout that resolves the `game` record and its `participatingTeams` snapshot from Convex.
+
+**Cross-server reachability**. The application is served by *one* Snek Centaur Server, which hosts a known set of Centaur Teams (08-REQ-004). The team-scoped routes whose semantics require this server's bot-framework process — heuristic config, bot params, the live operator interface, the team game history — are accessible only when `[teamId]` is one of this server's hosted teams (08-REQ-012, 08-REQ-028); navigating to such a route for a non-hosted team is refused by the team-scoped layout's load function with an explanatory empty state, consistent with 08-REQ-012. All other team-scoped routes (team profile, team management view, coach mode) are cross-server: any Snek Centaur Server's frontend renders them for any team. Cross-server deep-links are produced in the home view's "live games" section (08-REQ-010a) and in the team profile's "in-progress" indicators by resolving the team's `nominatedServerDomain` ([05-REQ-014]) and emitting an absolute URL to that server's `/teams/[teamId]/live` route. The receiving server handles auth on its own (the user is authenticated against Convex globally).
+
+**Refusal semantics for `/teams/[teamId]/live`** (08-REQ-012): the load function checks `game.status === "playing"` for the team's current game; if no `playing` game exists it returns an empty-state component that explains "no game in progress" and links back to the team's home. This is a positive component, not an HTTP 404, so the navigation surface remains coherent.
+
+---
+
+### 2.3 Authentication and Session Management
+
+**OAuth and user record**. Sign-in flows through Convex Auth's Google OAuth provider per [03] §3.14. The SvelteKit `hooks.server.ts` adapts Convex Auth's session cookie into a server-side session that exposes the user record per [05]'s `User` exported interface to every load function (08-REQ-006, 08-REQ-007). The user record carries the human's display name and the platform-admin flag; per 08-REQ-091a / 08-REVIEW-016 it does **not** include the email field on any client-visible projection.
+
+**Captain status reactivity**. Captain status is read from `centaur_teams.captainUserId` ([05]) via a Convex reactive query subscribed by the team-scoped layout. When the Captain reactively changes mid-session — e.g., a Captain transfer from the Team Management view (08-REQ-023d), or the user being removed from the team — every gated affordance re-renders without page reload (08-REQ-008). Implementation pattern: a Svelte 5 `$derived` rune over the layout's reactive `team` value yields a `role: "captain" | "member" | "coach" | "admin" | "none"` value that descendant components read; affordances bind their `disabled`/visibility to this `$derived` value rather than to a load-time snapshot.
+
+**Admin role**. The platform admin role per [05-REQ-065] is exposed on the user record as a boolean. Admin-only affordances (§8.21) bind to it through the same `$derived` reactivity (08-REQ-009c) so an admin role granted or revoked during the session takes effect immediately.
+
+**Sign-out**. The `/sign-out` endpoint clears Convex Auth's session cookie and any client-held SpacetimeDB access tokens (08-REQ-009b), then redirects to `/sign-in`. SpacetimeDB sockets opened during the session are closed by the live-mode data source teardown (§2.4).
+
+**Token issuance and storage discipline** (08-REQ-009 / 009a). The application never mints a SpacetimeDB access token of its own: every token is obtained through the Convex-mediated issuance path of [05-REQ-035] / [03] §3.17 by calling Convex actions and receiving the JWT in the response payload. Tokens are held in component-local memory only for the lifetime of the subscription that uses them — never persisted to localStorage, sessionStorage, IndexedDB, or cookies, and never reflected back into the URL or any UI surface. API key plaintext is shown exactly once at creation time (08-REQ-095b) via a modal that holds the plaintext in a closure with no logging side effect; dismissing the modal discards the plaintext.
+
+---
+
+### 2.4 Data-Source Abstraction (Centaur-Lib API)
+
+The data-source abstraction (08-REQ-076 / 077 / 078) is the load-bearing contract between `@snek-centaur/server-lib` and the forked operator UI. Its design choice is the single most consequential one in this module because it determines what teams' forks may safely modify and what they must accept as fixed.
+
+**Shape**. The abstraction is an interface (TypeScript type plus factory functions) the library exports; UI components consume it through Svelte 5 context injection rather than as a global rune store. Three factories produce three concrete bindings of the same interface:
+
+- `createLiveDataSource({ gameId, centaurTeamId, gameCredential })` — binds reads to the SpacetimeDB game subscription and the Convex Centaur-state subscription ([06-REQ-043]); binds mutations through Convex's `[06]` function contract surface ([06-REQ-030]) and through SpacetimeDB's `stage_move` reducer ([04] §2.4).
+- `createReplayDataSource({ gameId })` — binds reads to the persisted replay ([05-REQ-040]) and the action log ([06-REQ-035]); the mutation surface is **absent** (not present at the type level — replay-mode UI cannot accidentally call a mutation because no mutation function exists on the returned object). This satisfies 08-REQ-078's negative requirement structurally rather than at runtime.
+- `createCoachDataSource({ gameId, centaurTeamId, coachToken })` — binds reads to the coached team's filtered SpacetimeDB views via the coach SpacetimeDB token issued per [05] §3.4 ([05-REQ-067]) and to the same Convex Centaur-state subscription a member would see; the mutation surface is **absent**, so coach-mode UI cannot mutate (08-REQ-052b).
+
+The interface is structured as a set of *read* signals — Svelte 5 readable runes (specifically `$state` snapshots or `$derived` projections produced inside the factory) wrapping reactive subscriptions — and a *mutations* object whose presence depends on the binding (`live` only). UI components depend on the interface, not on which binding produced it (08-REQ-077): a single `<BoardDisplay>` component renders identically in live, replay, and coach mode by reading from `dataSource.boardState`, `dataSource.snakes`, `dataSource.selections`, etc.; whether those signals are sourced from a live SpacetimeDB subscription or from a reconstructed historical slice is invisible to the component.
+
+**Why context injection rather than a global store**. Two replay viewers may be open in two browser tabs viewing different games simultaneously, and a single tab may host both a coach-mode panel and a replay panel. A global store would force a singleton binding that conflicts with this; per-component-tree context injection lets each panel host its own data source. Live-mode bindings are per-tab in practice (the application surfaces only one live game at a time per team), but the same context-injection pattern keeps the call shape uniform.
+
+**Inspection state**. Inspection state (08-REQ-052c, 08-REQ-074) is **not** part of the data-source abstraction, because it is purely client-local UI state with no Convex or SpacetimeDB write path (08-REVIEW-008). Each panel's `<InspectionProvider>` Svelte context owns a `inspectedSnakeId: SnakeId | null` rune; the data-source abstraction is unaware of inspection. This keeps the abstraction's contract identical between member, coach, and replay use sites — only the inspection provider varies.
+
+**Mutation routing**. Live-mode mutations are dispatched as Convex mutations against [06]'s function contract surface (08-REQ-104), which is the ultimate authority for invariants (08-REQ-080a). The data source surfaces the mutation result (success or rejection) to the caller; UI components use this result to drive the user-feedback path of §2.18 (08-REQ-100). Move staging is dispatched directly to SpacetimeDB's `stage_move` reducer through the SpacetimeDB client, since [04] is the authoritative source for staged-move state.
+
+**Replay-mode reconstruction**. The replay binding's read signals are `$derived` projections over a scrubbed-position cursor (`scrubberPositionRune: number`) of two underlying datasets: the persisted board-level replay ([05-REQ-040]) and, for team-perspective replay (08-REQ-071), the action log ([06-REQ-035]) for the viewer's team. Per-Turn-mode and Timeline-mode scrubbing both feed the same cursor; the cursor's units differ (turn index vs ms since game start) but the projection logic is identical. The action-log reconstruction yields, at any cursor position, the per-snake portfolio state, per-operator ready-state, per-snake selection state, and the per-snake `SnakeBotStateSnapshot` ([07] §3.4) that was current at the most recent prior write of each — i.e., it is a "scrubbed view of last-written state" rather than a continuous interpolation. This matches the replay reconstruction obligation of 08-REQ-072 and uses the action-log event union of [06-REQ-036] as the reconstruction substrate.
+
+---
+
+### 2.5 State Management and Cross-Cutting Reactivity
+
+**Svelte 5 runes posture**. All UI reactivity uses Svelte 5 runes (`$state`, `$derived`, `$effect`). Reactive Convex queries are wrapped by `convex-svelte`'s `useQuery` analogue, which exposes a rune; reactive SpacetimeDB subscriptions are wrapped by a thin adapter that exposes a `$state`-backed rune updated by the SpacetimeDB client's table-row delta callbacks. This places every reactive input on the same uniform rune substrate so `$derived` compositions span Convex, SpacetimeDB, and presence sources without special-casing.
+
+**Convex reactive query integration**. Each load function in the team-scoped, game-scoped, and platform-scoped layouts opens the Convex queries it needs and threads them down via context (the data source for game-scoped state; named layout context entries for cross-cutting state such as `currentUser`, `team`, `role`, `participatingTeams`). Mutations dispatch through `convex-svelte`'s mutation API and return a `Promise<Result>` whose rejection branch feeds §2.18's user-feedback path.
+
+**SpacetimeDB subscription integration**. The live-mode data source opens one SpacetimeDB connection per (team, game) via the SpacetimeDB browser client, authenticated with the per-Centaur-Team game credential issued per [05] §3.4 / [03] §3.17. The connection subscribes to the queries described by [04] §2.12 for a member operator. The spectating data source opens a second SpacetimeDB connection authenticated with a spectator access token (08-REQ-081); subscriptions follow [04] §2.12's spectator pattern. Coach mode opens a third connection via the coach SpacetimeDB token path of [05] §3.4. Each connection is owned by its respective data source and torn down on data-source disposal (08-REQ-089, 08-REQ-082a, 08-REQ-083a).
+
+**Network latency measurement** (08-REQ-036). The latency indicator measures end-to-end round-trip time against the SpacetimeDB subscription channel by issuing periodic lightweight heartbeat reads (subscribing to a singleton row whose updates are timestamped server-side) and computing `now() - lastUpdateTimestamp` debounced to the most recent N samples. This avoids requiring a new RTT-specific reducer or Convex field. The exact sampling interval (a few seconds) is a design discretion not visible in any contract.
+
+**Presence integration via `@convex-dev/presence`** (08-REQ-035, 08-REVIEW-004). Each team's live session installs an `@convex-dev/presence` channel keyed `team:${centaurTeamId}:game:${gameId}` and joined by every connected operator (member, coach, admin) on entry to the live operator interface or coach view. The per-presence-record shape (extending `@convex-dev/presence`'s base shape) is:
+
+```typescript
+interface OperatorPresenceRecord {
+  userId: string                 // resolves to a User record per [05]
+  role: "member" | "coach" | "admin"
+  displayName: string            // OAuth display name; never email
+  colour: string                 // hex; per-operator stable colour for the game's lifetime (§3.3)
+  currentSelectionSnakeId: string | null   // mirrors [06]'s snake_operator_state for header presence
+  // Per-operator ready-state is read from [06] §2.1.5 / 06-REQ-040b directly,
+  // not duplicated into presence — the presence record only proves connectedness.
+}
+```
+
+Presence delivers connectedness; ready-state is read from [06]'s `operator_ready_state` table per [06-REQ-040b] (08-REQ-061). The header presence display (08-REQ-032) joins these two sources reactively: a `$derived` rune over both produces the per-operator presentation showing each connected operator's display name, colour, and current ready-state. The `role` field is what enables the visual distinction of coach/admin from member operators (08-REQ-064a).
+
+**Per-operator stable-colour assignment**. The colour is assigned deterministically from `(gameId, userId)` so the same operator gets the same colour across reloads of the same game and across all clients viewing that game (08-REQ-035, 08-REQ-039, 08-REQ-073). The function takes both inputs and returns a hex colour from a fixed accessibility-screened palette of 16 hues, hashed to balance distribution. Specified as the exported `assignOperatorColour(gameId, userId)` in §3.3.
+
+---
+
+### 2.6 Game Invitation Endpoint
+
+**Route**. SvelteKit `+server.ts` at `src/routes/.well-known/snek-game-invite/+server.ts` exposes a `POST` handler (08-REQ-005). The path is required to be exactly `/.well-known/snek-game-invite` because [05] §3.4 invitation orchestration calls this URL on the team's `nominatedServerDomain`.
+
+**Request validation**. The handler validates the inbound JSON payload against [03]'s game-credential format (the per-Centaur-Team game credential JWT issued by Convex Auth's customJwt provider per [03] §3.15 and the invitation envelope per [03] §3.16). Validation steps:
+1. Verify the envelope's signature against Convex's published JWT verification key per [03] §3.17.
+2. Parse the `centaurTeamId` and `gameId` claims.
+3. Verify the `centaurTeamId` is one of the teams hosted by this Snek Centaur Server (matched against a server-config-time list of hosted team IDs). Unknown teams return HTTP 403.
+4. Verify the invitation has not already been accepted for this `(centaurTeamId, gameId)` pair (idempotence guard against duplicate Convex deliveries).
+
+**Optional whitelist**. Server operators may configure an additional allowlist of acceptable inviting Convex deployment fingerprints (defence-in-depth in case Convex's signing key is misconfigured); this is a server-config concern, not a requirement, and absent the allowlist any signature-valid invitation from the platform's Convex deployment is accepted.
+
+**Acceptance and handoff**. On successful validation the handler:
+1. Persists the `(centaurTeamId, gameId, gameCredential, expiresAt)` record to a server-local store (in-memory, cleared on game end). Persistence is required so subsequent SvelteKit requests from this team's operators can read the credential.
+2. Calls into the in-process `@snek-centaur/server-lib` bot-framework session manager via `startGameSession({ centaurTeamId, gameId, gameCredential, registry: HEURISTIC_REGISTRY, ... })` per [07] §3.3 to boot the team's bot-framework session. The session manager is co-resident in this Node process, so the call is a direct function invocation; no IPC.
+3. Returns HTTP 200 with the response body shape defined in §3.1.
+
+**Failure modes**. Invalid signature → 401. Unknown team → 403. Duplicate invitation for an already-accepted game → 200 with `alreadyAccepted: true`. Bot-framework boot failure → 500 with a diagnostic body. The endpoint never reveals server-internal state in error messages beyond the failure category.
+
+---
+
+### 2.7 Live Operator Interface — Board Renderer and Gestures
+
+**Renderer choice**. The board is rendered with **SVG** as the primary substrate, with a single underlying HTML5 `<canvas>` layer used only for grid lines and base terrain rendering when the cell count exceeds a threshold. Rationale: SVG yields per-cell DOM nodes that bind cleanly to Svelte's reactivity and to per-cell event handlers (click-to-select 08-REQ-042, click-to-target 08-REQ-053, hover affordances), and the typical board size (≤ a few hundred cells) is well within SVG performance limits. The canvas fallback for large boards keeps the rendering complexity bounded without changing the gesture layer (gestures hit-test against an invisible SVG overlay regardless of which substrate paints the base layer). A pure-canvas approach was considered and rejected because hit-testing for click-to-select would require manual pick-region maintenance and would lose the accessibility tree.
+
+**Layered rendering** (08-REQ-037 through 08-REQ-041, 08-REQ-048 through 08-REQ-051):
+- **Layer 0 — terrain**: grid lines, hazard cells, fertile tiles. Static within a turn; re-renders only on board mutations.
+- **Layer 1 — items**: food, invulnerability potions, invisibility potions. Re-renders on subscription deliveries.
+- **Layer 2 — snakes**: alive snakes by team colour, head letter designation, neck-segment length label, effect outlines (invulnerability blue / negative-invulnerability red per 08-REQ-038), invisibility shimmer (own team only per 08-REQ-038's RLS posture). Re-renders on subscription deliveries.
+- **Layer 3 — selection shadows**: per-operator coloured glows on selected snakes (08-REQ-039), driven by [06]'s selection record subscription joined to the per-operator stable-colour function (§3.3).
+- **Layer 4 — staged-move markers**: distinctive border on the destination cell of each owned snake's staged move (08-REQ-041). Updates reactively as staged moves change in [04].
+- **Layer 5 — candidate highlights**: per-direction stateMap-coloured overlay on the four cells adjacent to the currently-selected owned snake's head (08-REQ-040). Coloured by stateMap score on a monotone ramp; "no entry yet" cells render in a distinct neutral state (08-REQ-040, [07-REQ-049]).
+- **Layer 6 — worst-case overlay**: when a direction is selected on an owned snake, this layer renders the worst-case simulated world for that (snake, direction) pair as translucent overlays (08-REQ-048). The annotations rendering called for by 08-REQ-049 is **deferred** in this design pass — [07] §3.4 (per the 07-REVIEW-014 cascade) excised the `WorldAnnotations` field from `SnakeBotStateSnapshot.worstCaseWorlds`, so the data substrate 08-REQ-049 names is not currently published by the framework. New REVIEW item 08-REVIEW-023 is filed to govern the annotations replacement design; until that REVIEW item is resolved this layer renders the simulated `state` only and surfaces no per-direction annotations. Hidden when no direction is selected (08-REQ-051).
+- **Layer 7 — inspection overlays**: client-local inspection state (replay viewer 08-REQ-074 / coach mode 08-REQ-052c) drives the worst-case-world / candidate-highlight / decision-table panels for the inspected snake **without** producing any layer-3 selection shadow (08-REQ-052c, 08-REQ-074). In coach mode the inspected snake is decorated with a visually distinct indicator (e.g., a dashed magenta ring) explicitly differentiated from selection shadows (08-REQ-052d).
+
+**Click-to-select gesture** (08-REQ-042). Click on a snake body cell whose snake the caller is eligible to select per [06-REQ-024] dispatches `selectSnake` to [06]. If the snake is currently selected by another operator, the gesture instead opens a displacement-confirmation modal; on explicit confirmation the modal dispatches `selectSnake` with the displacement flag set per [06-REQ-022]. Without confirmation no mutation issues. Pressing `Escape` while a snake is selected dispatches `deselectSnake`. Selecting a different eligible snake dispatches `selectSnake` for the new target (which implicitly releases the prior selection per [06]'s "at most one selected snake per operator" invariant [06-REQ-019]). Click-and-drag and double-click are unbound on snake cells in member mode.
+
+**Coach inspection gesture** (08-REQ-052c, 08-REQ-052d). In coach mode the click gesture on a snake body is **not** click-to-select; it is `Shift+Click` (or alternatively `right-click` opening a context menu with "Inspect" as the only entry), with cursor and hover treatment visibly distinct from member mode. A plain click on a snake in coach mode does nothing, so a coach can never accidentally trigger a (no-op) selection-style action that a viewer might misread as an attempt to take control of the team's snake. Pressing `Escape` clears inspection. The coach's inspection visual indicator (layer 7 above) cannot be confused with an operator's selection shadow because the rendering is structurally different (dashed magenta ring vs solid coloured glow) and is rendered only on the coach's own client (08-REQ-052c — inspection is purely client-local).
+
+---
+
+### 2.8 Live Operator Interface — Header
+
+**Header layout** (08-REQ-032, 08-REQ-033, 08-REQ-035, 08-REQ-036, amended per 08-REVIEW-011):
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Turn N  │  Clock 12.3s  │  Budget 4m17s  │  Net 28ms  │  ●●●○○  │ [Submit] │
+└──────────────────────────────────────────────────────────────────────────────┘
+   ↑          ↑                ↑                ↑           ↑          ↑
+   turn       team clock       remaining        net         presence   Captain
+   number     (sub-second)     time budget      latency     + ready    only
+```
+
+**Turn number** (08-REQ-032). Read from SpacetimeDB's current-turn subscription field per [04]'s exported subscription pattern.
+
+**Team clock countdown** (08-REQ-033). Sub-second precision: `seconds.tenths` format (e.g., `12.3s`). Below a configurable threshold (default 1.0 s) the rendering enters a warning state (red colour, slightly larger). When the team's turn has been declared over per [01-REQ-039] — observed via SpacetimeDB's `turnEndTime` field collapsing or the dedicated turn-over signal exposed by [04] §2.5 — the countdown is replaced by a static "turn submitted" indicator until the next turn begins; it does not flicker back to a live countdown while other teams declare (08-REQ-033). The animation uses `requestAnimationFrame`-driven local interpolation between authoritative SpacetimeDB updates so the rendered countdown advances smoothly without requiring per-tick subscription deliveries.
+
+**Remaining time budget**. Read from SpacetimeDB's per-team time-budget field per [04]; rendered as `m:ss` because budgets are minutes-scale.
+
+**Network latency** (08-REQ-036). Computed per §2.5; rendered as `Net Nms` with a colour ramp degrading at higher values.
+
+**Presence display** (08-REQ-032, 08-REQ-035, 08-REQ-064a). Shows each *other* connected operator (the local user's own presence is implicit and is conveyed by their own per-operator ready-state toggle and their own selection state on the board). For each entry:
+- A coloured dot of the operator's per-operator stable colour (§3.3).
+- The operator's display name on hover or always-visible per design discretion.
+- A ready-state indicator next to the dot: filled circle (●) if `ready`, hollow circle (○) if `not-ready`. The local user's own ready-state is rendered separately as the toggle of §2.10.
+- A role badge for coaches (`C`) and admins (`A`) per 08-REQ-064a; member operators get no badge. Coach/admin entries render no ready-state indicator (they have no ready-state per 08-REQ-064a) and a slightly different visual styling so a viewer can never mistake an admin's connectedness for a member's quorum contribution.
+
+**Captain control affordances** (08-REQ-032, §2.10). Shown only when `role === "captain"`; rendered as a single right-aligned "Submit Turn" button with keyboard binding (08-REQ-066) to `Ctrl+Enter` (or `Cmd+Enter` on macOS) — a chord chosen because it cannot be triggered accidentally during direction-key play (the four arrow keys are reserved for move staging per 08-REQ-045).
+
+---
+
+### 2.9 Live Operator Interface — Drive Management and Decision UX
+
+**Drive dropdown** (08-REQ-052, 08-REVIEW-021). The dropdown's options are computed as `heuristic_config ∩ HEURISTIC_REGISTRY` filtered to `heuristicType === "drive"`, then ordered:
+1. Pinned heuristics in the order specified by `global_centaur_params.pinnedHeuristics`.
+2. Remaining heuristics lexicographically by `nickname`.
+3. Tiebreaker by `heuristicId`.
+
+The intersection is computed at render time from the live `heuristic_config` Convex query and the build-time `HEURISTIC_REGISTRY` import. Drive entries that are in the registry but not yet in `heuristic_config` are not visible in the dropdown until the lazy-insert of §2.11 runs on a Captain visit to the global centaur params page; conversely, stale `heuristic_config` rows whose IDs are no longer in the registry are not visible in the dropdown (they are visible only on the global centaur params page where the Captain can see and delete them per §2.11).
+
+**Eligibility filtering for targeting** (08-REQ-053). After the operator selects a Drive type, the board enters targeting mode for that Drive's `targetType` ([07] §3.1). Eligibility is computed by calling the Drive's `targetEligibility(candidate, self, board)` predicate ([07] §3.2) over every candidate snake or cell. Eligible candidates are rendered with a highlight; ineligible candidates are dimmed. Clicking an eligible candidate confirms; clicking an ineligible one is a no-op; pressing `Escape` cancels targeting without altering selection state (08-REQ-054).
+
+**Tab cycle** (08-REQ-054). Pressing `Tab` while in targeting mode advances the highlighted candidate through the eligible set in the deterministic three-key order specified by 08-REQ-054:
+1. **Primary**: A*-distance from the selected snake's head, ascending. A* runs on the current pre-turn board against passable cells; cell candidates use their own coordinates, snake candidates use their head coordinates.
+2. **Secondary**: clockwise angle in board coordinates from the snake's current head direction, starting at 0° (straight ahead) and increasing through 360°.
+3. **Tertiary**: target identity. For snake targets: snake id ascending. For cell targets: row-major (row ascending, then column ascending).
+
+Computed once at targeting-mode entry from a snapshot of the eligible set + board state and cached for the duration of targeting; if the eligible set or board changes during targeting (e.g., a foreign turn declaration mid-targeting) the cycle is invalidated and recomputed. `Shift+Tab` cycles in reverse using the same key order.
+
+**Confirmation and weight** (08-REQ-055). Confirming a target dispatches `addDriveToSnake({ snakeId, heuristicId, target, weight: defaultWeight })` per [06-REQ-015] using the registry's `defaultWeight` if the team's `heuristic_config` has not overridden it (precedence: `heuristic_config.weight` if present, else `HEURISTIC_REGISTRY` entry's `defaultWeight`).
+
+**Active Drive list** (08-REQ-056). Displayed in the snake's control panel as a list of cards; each card binds to a single `snake_drives` row ([06]) and exposes weight edit (range 0..1, step 0.01), activation toggle, and remove. Edits dispatch [06-REQ-015]'s mutation; the framework reacts per [07-REQ-015] without any client-side coordination required.
+
+**Decision breakdown table** (08-REQ-059, 08-REQ-060). Renders one row per heuristic active on the selected snake with columns: name, raw output (from `SnakeBotStateSnapshot.heuristicOutputs[direction][heuristicId]` per [07] §3.4), portfolio weight (from `snake_drives` / `heuristic_config`), weighted contribution (`output × weight`), and relative impact (the contribution divided by the direction's total score). Updates reactively on every `SnakeBotStateSnapshot` write and on operator switches between selected directions. Per [07] §3.7 DOWNSTREAM IMPACT no-recompute rule, the table renders **purely** from the framework's published `heuristicOutputs` snapshot — no client-side re-evaluation, no interpolation, no carry-over from a prior turn's snapshot. Missing `(direction, heuristicId)` entries render as `—`.
+
+**Worst-case world preview** (08-REQ-048, 08-REQ-050, 08-REQ-051). When a direction is selected for an owned snake, the worst-case overlay (layer 6, §2.7) reads `SnakeBotStateSnapshot.worstCaseWorlds[direction]` per [07] §3.4 and renders the `state` field as a translucent overlay. The per-snake turn-timestamp field on `SimulatedWorldSnapshot` per [07] §3.4 is used to mark snakes whose `perSnakeTurnTimestamp[snakeId] < simulatedTurn` as visually frozen (e.g., a small "held in place" badge or a slightly desaturated rendering), per [07] §3.7's recommendation to surface this distinction. The annotations rendering of 08-REQ-049 is deferred per the 08-REVIEW-023 cascade noted in §2.7 layer 6 — the framework no longer publishes a `WorldAnnotations` payload, so this design pass renders no per-direction annotations until 08-REVIEW-023 is resolved. Updates to the simulated `state` and to the per-snake turn timestamps are driven entirely by the reactive snapshot subscription (08-REQ-050).
+
+---
+
+### 2.10 Per-Operator Ready-State and Captain Controls
+
+**Ready-state toggle UI** (08-REQ-061, 08-REQ-063). The local operator's ready-state toggle is a prominent control adjacent to the header presence display, rendered as a two-state switch with explicit labels (`Not Ready` / `Ready`). Toggling dispatches the `setOperatorReady({ centaurTeamId, gameId, ready })` mutation per [06-REQ-040b]. The toggle remains active throughout the turn (08-REQ-063); the underlying mutation is idempotent so duplicate toggles are harmless. On every new-turn boundary the local toggle resets visually to `Not Ready` (08-REQ-064), driven by the reactive `operator_ready_state` subscription per [06-REQ-043] which is reset upstream by [06-REQ-040b]'s per-turn reset semantics.
+
+**All-ready quorum visualisation** (08-REQ-062). The header presence display's per-operator ready-indicators collectively visualise the unanimity quorum: when every connected member operator (excluding coaches/admins per 08-REQ-064a) shows `●`, the Captain control area additionally shows a small "All Ready — automatic submission armed" indicator. This is a pure visualisation; the actual gating semantics live in [07-REQ-044] / [07-REQ-045] and the flush in [04]'s `declare_turn_over`.
+
+**Coach/admin exclusion from quorum** (08-REQ-064a). The presence display's role badges (`C`/`A` per §2.8) implicitly exclude coach/admin entries from the quorum visualisation: their entries render no ready-indicator at all, so a viewer counting "filled vs hollow" naturally ignores them. The underlying `operator_ready_state` table per [06] also has no row for coaches/admins because they never call `setOperatorReady`.
+
+**Captain turn-submit affordance** (08-REQ-065, 08-REQ-066, 08-REQ-067). Visible in the header only when `role === "captain"`. Clicking the button (or pressing the keyboard binding) calls SpacetimeDB's `declare_turn_over` reducer ([04] §2.5) directly; per [07] §3.7's flush-suppression coordination note, the bot framework observes the resulting turn transition through its existing SpacetimeDB subscription and applies 07-REQ-045a's flush suppression on its own — no out-of-band channel from the UI to the framework is opened. Non-Captain operators do not see the affordance and cannot reach the underlying reducer through the UI; even if they construct a synthetic call, [06]'s function contract surface rejects per [06-REQ-031] (08-REQ-067).
+
+**Action-log emission** (08-REQ-068). `setOperatorReady` writes the `operator_ready_toggled` action-log entry per [06-REQ-040b]. `declare_turn_over` writes the team-side turn-submission entry per [06-REQ-036]. No additional client-side action-log writes are issued from the header.
+
+---
+
+### 2.11 Heuristic Configuration Page
+
+**Page scope** (08-REQ-014). Reads `heuristic_config` for the team via [06-REQ-032]; intersects with `HEURISTIC_REGISTRY` to classify each row as **active** (in both), **stale** (in `heuristic_config` only), or **registry-only** (in registry only). All three classes are surfaced on this page (in contrast to the in-game Drive dropdown of §2.9, which surfaces only active rows).
+
+**Lazy-insert on Captain visits** (08-REVIEW-021). When a user with `role === "captain"` loads this page, the page's `+page.svelte` invokes `insertMissingHeuristicConfig({ centaurTeamId, registrations: getRegisteredHeuristics(HEURISTIC_REGISTRY) })` per [07] §3.7 / [06]'s exported mutation. The mutation is insert-only and never overwrites; previously-Captain-edited values are preserved. The returned `inserted` list is surfaced as a non-blocking toast ("3 new heuristics added to your configuration with their default weights") so the Captain knows the registry has expanded. Non-Captain visitors do not invoke the mutation (they have no Convex auth scope to do so per [06]'s function contract) and see only the current state.
+
+**Edit affordances for Captains** (08-REQ-015, 08-REQ-016, 08-REQ-017). For each registered Preference: an `Active by default` toggle and a `Default weight` numeric input, dispatching to [06]'s `heuristic_config` mutation surface. For each registered Drive type: a `Default weight` numeric input, a `Nickname` text input, and a `Pin` toggle. Pinning is implemented as a Captain-only mutation that updates `global_centaur_params.pinnedHeuristics` per [06-REQ-011] / [06-REQ-007], with adjacent reorder-up/reorder-down arrows on each pinned entry to permute the array. Non-Captain team members see all controls in a disabled state (08-REQ-017, 08-REQ-019).
+
+**Stale entry display** (08-REVIEW-021). Stale entries (in `heuristic_config` but not in the current `HEURISTIC_REGISTRY`) are shown in a distinct visual style (greyed out with an icon and tooltip "no longer registered by this server") and offered a `Delete` affordance that calls [06]'s `deleteHeuristicConfig({ centaurTeamId, heuristicId })` mutation. Deletion is Captain-only per [06]'s function contract.
+
+**"Defaults for future games only" affordance** (08-REQ-018). A persistent banner at the top of the page reads "Edits affect your team's defaults for the **next** game only. Games currently in progress are unaffected." A second-level explanatory tooltip on hover expands to detail the snapshot semantics of [06-REQ-009] / [06-REQ-040a].
+
+---
+
+### 2.12 Bot Parameters Page
+
+**Page scope** (08-REQ-020, amended per 08-REVIEW-011). Reads `global_centaur_params` for the team via [06-REQ-032]. Captain-editable fields per [06-REQ-011]:
+- `softmaxTemperature` (slider with numeric input, range per [06]).
+- `automaticTimeAllocationMs` (numeric input in milliseconds).
+- `defaultScheduledSubmissionIntervalMs` (numeric input in milliseconds, default 100; per [07] §3.5 / [07-REVIEW-012]).
+- `defaultImminentThresholdMs` (numeric input in milliseconds, default 50; per [07] §3.5 / [07-REVIEW-012]).
+- `pinnedHeuristics` is *not* edited here; it is edited from the heuristic configuration page (§2.11).
+
+The page does **not** expose `defaultOperatorMode` or `turn0AutomaticTimeAllocationMs` (excised per 08-REVIEW-011) and does **not** expose any room/game-config parameter (08-REQ-023).
+
+**Edit gating** (08-REQ-021). Captain-only via [06]'s function contract; non-Captain visitors see read-only values. The same "next game only" banner as §2.11 (08-REQ-022) explains that values are snapshotted into game-scoped state at game start per [06-REQ-040a].
+
+---
+
+### 2.13 Room Browser, Room Creation, and Room Lobby
+
+**Room browser** (08-REQ-024a, 08-REQ-024b, 08-REQ-024c, 08-REQ-024d). Reads from [05]'s rooms query surface. Renders a paginated list with name search; each row links to `/rooms/[roomId]`. The "Create Room" affordance dispatches [05]'s room-creation mutation; on success the user is redirected to the new room's lobby and is its owner per [05-REQ-017] / [05-REQ-019].
+
+**Room lobby** (§8.8). A single page with three logical regions:
+1. **Configuration region**: parameter editors for every game-config parameter of [05-REQ-023]. Each editor uses a type-appropriate widget (number with min/max, boolean toggle, enum dropdown) and enforces ranges client-side per 08-REQ-027d. Conditional parameters (08-REQ-027e) are visually nested under their gating parameter and remain editable when the gate is off, but render with a "currently inactive" badge. Parameter edits dispatch [05]'s configuration mutation per [05-REQ-022] / [05-REQ-032b], which both persists the new value and triggers Convex board regeneration (see board preview region). Edits are debounced (default 300 ms) to bound regeneration cadence under rapid editing; this debounce is purely a UX concern and does not relax 08-REQ-027d's authoritative-enforcement-via-Convex posture.
+2. **Board preview region** (08-REQ-027i, 08-REQ-027j, 08-REQ-027k, 08-REVIEW-014, 08-REVIEW-015). Subscribes to the not-yet-started game record's `boardPreview` field via Convex's reactive query; renders the field as a miniature SVG board reusing the same renderer as §2.7 in a constrained viewport. The application performs **no** board generation client-side — every preview rendered here is the output of Convex's preview mutation per [05-REQ-032b]. A `Lock In` toggle binds to `boardPreviewLocked` on the game record per 08-REQ-027j and dispatches [05]'s mutation to set/clear the flag. When locked, the preview is annotated visually ("This layout will be used at game start"); when unlocked, the preview annotation reads "Preview only — game start will regenerate from a fresh seed" and the preview continues to update reactively as parameters change.
+3. **Enrolment and readiness region** (08-REQ-027a, 08-REQ-027f, 08-REQ-027g, 08-REQ-027h). Displays each enrolled team with its readiness indicator. For each enrolled team where the local user is the Captain, a `Mark Ready`/`Unmark Ready` toggle is shown per 08-REQ-027f / 08-REVIEW-013 (Captain-only); other team members see the indicator read-only. A `Ping Server` button per 08-REQ-027g dispatches a [05]-mediated healthcheck against the team's nominated server and renders the result inline. The "Start Game" button is gated per 08-REQ-027h on `(enrolledTeams.length >= 2) && (every enrolledTeams.ready === true)`; when disabled, the button's tooltip explains which precondition is unmet. Clicking dispatches [05]'s game-start mutation per [05-REQ-031].
+
+**Live spectating link** (08-REQ-027l). When the room has a game in `playing` status, the lobby displays a "Spectate Live" link to `/games/[gameId]/spectate`.
+
+---
+
+### 2.14 Live Spectating
+
+**Entry and token acquisition** (08-REQ-080, 08-REQ-081). On entry to `/games/[gameId]/spectate`, the page calls a Convex action (per [05-REQ-035] / [03] §3.17 spectator path) that returns a spectator SpacetimeDB access token. The token is held in component-local memory only (08-REQ-009a) and used to open the SpacetimeDB connection per [04-REQ-018].
+
+**Subscriptions** (08-REQ-082, 08-REQ-083, 08-REQ-084, 08-REQ-084b, 08-REQ-085, 08-REVIEW-018, 08-REVIEW-019). The spectator subscribes to:
+- The current-state subscription per [04] §2.12 spectator pattern (board, snakes filtered by `visible`, items, hazards, fertile tiles, turn events).
+- The full historical state up-front per [04-REQ-054]'s mid-game-join pattern (08-REQ-087, 08-REVIEW-019), accepting bounded entry latency proportional to game length. Games are bounded to a few hundred turns; up-front delivery is acceptable per the explicit user tolerance.
+- The dedicated `scoreboard_view` per game per [04] §2.9 (DOWNSTREAM IMPACT recorded by [04]'s 04-REVIEW-020), which publishes `(teamId, teamScore, aliveSnakeCount, aggregateLength)` computed server-side over the true alive-snake set.
+
+**Rendering**. The board renderer of §2.7 is reused with the spectator data source (no selection layer, no candidate-highlight layer, no worst-case overlay). Invisibility is honoured purely by the absence of subscription deliveries (08-REQ-083); the application does not attempt to infer hidden state. The scoreboard renders the `scoreboard_view` aggregates verbatim with no client-side aggregation (08-REQ-084, 08-REQ-084b). The header displays the per-team chess-timer state and per-team turn-declared status from [04]'s subscription (08-REQ-085).
+
+**Timeline scrubber** (08-REQ-087, 08-REQ-088). A single timeline control along the bottom of the view permits navigation to any previously completed turn. Scrubbing backward switches the rendering to the historical reconstructed state at the chosen turn while keeping the live subscription open in the background; the view shows a prominent "Viewing Turn N — not live" banner with a "Return to Live" button (08-REQ-088). Returning to the live head dismisses the banner and resumes live rendering.
+
+**Spectator-to-coach-mode entry** (08-REQ-052a). When the local user is a designated coach (per [05-REQ-067]) or admin (per [05-REQ-066]) for a participating team, the spectator view displays a per-team "Enter Coach Mode" link to `/games/[gameId]/coach/[teamId]`. The link is hidden for users with no coach scope on any participating team.
+
+**Negative surface** (08-REQ-086). The spectator view contains no mutating affordance — no selection, no move staging, no ready-state toggle, no Captain control. The spectator data source has no mutation surface (analogous to the replay binding's structural prevention).
+
+**Teardown** (08-REQ-089). Navigating away or observing `game.status === "finished"` releases the SpacetimeDB subscription and discards the spectator access token.
+
+---
+
+### 2.15 Unified Replay Viewer
+
+**Mode selection** (08-REQ-069, 08-REQ-070, 08-REQ-071, 08-REQ-071a). The viewer's data source is selected on entry by the URL: `/games/[gameId]/replay` opens in board-level mode by default; `/games/[gameId]/replay?mode=team` opens in team-perspective mode if the viewer participated as a team member of one of the participating teams. Both modes share the unified timeline control (§2.15.1 below) and the data-source abstraction's replay binding (§2.4). Board-level mode binds with `participatingTeam: null`, scoping the action-log reconstruction to none (board-level mode renders no Centaur-subsystem state per 08-REQ-075b). Team-perspective mode binds with `participatingTeam: teamId`, scoping action-log reconstruction to that team only (08-REQ-075a's RLS-honouring posture is preserved by the action log's own team-scoping).
+
+**Component reuse** (08-REQ-071, 08-REQ-077). Team-perspective mode reuses the same `<BoardDisplay>`, `<DriveManagementPanel>`, `<DecisionBreakdownTable>`, `<WorstCaseWorldPreview>`, and `<HeaderPresence>` components as the live operator interface; the data-source binding of §2.4 makes their mutating affordances structurally absent in replay mode (no mutation surface exists), so each component renders read-only without per-component branching. Inspection is wired in per the inspection provider of §2.4 (08-REQ-074, 08-REQ-075).
+
+**Board-level rendering** (08-REQ-070, 08-REQ-070a, 08-REQ-070b). Board-level mode renders the public board state at the scrubbed turn (cells, snakes, items, hazards, fertile tiles, scoreboard) plus the per-turn event log. Visual consistency with the live spectating view is preserved by reusing the renderer of §2.7. Per 08-REQ-070, no SpacetimeDB consultation occurs — all data is sourced from the persisted replay of [05-REQ-040].
+
+**Historical selection shadows** (08-REQ-073). Team-perspective mode renders the operator selection state at the scrubbed timestamp as per-operator coloured shadows on the appropriate snakes, reconstructed from the action log. Operators not connected at the scrubbed moment produce no shadow.
+
+**Direct link** (08-REQ-075c). The viewer exposes a "Copy Link" affordance that produces the absolute URL `/games/[gameId]/replay` (or `?mode=team` if the viewer is in team-perspective mode); clicking the link from another authenticated user lands them in the viewer for the same game.
+
+#### 2.15.1 Unified Timeline Control
+
+**Per [08-REVIEW-010]**. The timeline control exposes a Per-Turn / Timeline mode toggle and per-mode scrubbing semantics, keyboard navigation, turn-marker rendering, and playback-speed sets per 08-REQ-072 through 08-REQ-072d.
+
+**State**. The control owns three pieces of client-local UI state:
+- `mode: "per-turn" | "timeline"` (default `per-turn` per 08-REQ-072a).
+- `speedPerTurn: 0.25 | 0.5 | 1 | 2 | 4 | 8` (turns per second).
+- `speedTimeline: 0.25 | 0.5 | 1 | 2 | 4 | 8` (× real time).
+
+All three are persisted in `sessionStorage` (per 08-REQ-072a — client-local, not Convex) and restored on subsequent navigation within the same session.
+
+**Per-Turn mode rendering** (08-REQ-072b). The scrubber is rendered as N equidistant tick marks where N is the total turn count. Scrubbing snaps to the nearest tick (the end of each turn). Playback advances the cursor by one turn per tick at the configured rate. The speed widget label reads "N turns/s".
+
+**Timeline mode rendering** (08-REQ-072c). The scrubber's horizontal axis is wall-clock time from `gameStartTime` to `gameEndTime` (sourced from the persisted replay metadata per [05-REQ-040]). Turn boundaries are rendered as turn-marker glyphs at their actual `turnDeclaredAt` clock positions (read from the replay's per-turn metadata) — explicitly non-equidistant, reflecting variable chess-clock duration. Scrubbing is continuous along clock time. Playback advances at the chosen scalar multiple of real time. The speed widget label reads "N× speed".
+
+**Keyboard navigation** (08-REQ-072d). Bound on `keydown` while the viewer has focus:
+- Timeline mode: `Left`/`Right` → ±1000 ms; `Shift+Left`/`Shift+Right` → ±200 ms; `Ctrl+Left`/`Ctrl+Right` (interpreted as `Cmd` on macOS) → snap to previous/next turn-marker.
+- Per-Turn mode: `Left`/`Right` → ±1 turn. Modifier-key bindings in Per-Turn mode are deferred per 08-REQ-072d (not bound in the reference implementation; forks may bind freely).
+
+`Space` toggles play/pause in both modes.
+
+---
+
+### 2.16 Coach Mode
+
+**Entry points** (08-REQ-052a). `/games/[gameId]/coach/[teamId]` is reached from:
+- The Live Spectating view's "Enter Coach Mode" link (§2.14).
+- The Team Profile view's in-progress game indicator when the user is a designated coach or admin.
+
+The route's load function verifies the user holds a coach scope on `[teamId]` per [05-REQ-067] (or implicit-coach permission per [05-REQ-066]); if not, the route refuses with a 403-equivalent empty state.
+
+**Token acquisition**. The coach data source per §2.4 is constructed via `createCoachDataSource({ gameId, centaurTeamId, coachToken })`, where `coachToken` is obtained via the coach SpacetimeDB token issuance path of [05] §3.4 ([05-REQ-067]).
+
+**Cross-server applicability**. Because coach mode reads only via [05]'s coach token issuance (which any Snek Centaur Server's frontend can request given a valid coach scope) and via [05]/[06] subscriptions (which are not server-pinned), coach mode is **cross-server**: any frontend served by any Snek Centaur Server in the platform can render coach mode for any team the user has coach scope on, regardless of which server hosts the team's bot framework. This contrasts with the member live operator interface (08-REQ-028, §2.2 cross-server reachability), which requires the team to be hosted by *this* server because the bot framework's per-team session is co-resident.
+
+**Rendering**. The coach view renders the same component tree as the live operator interface (board display, header, Drive management panel, decision breakdown table, worst-case world preview, presence display, action log). All mutating affordances are structurally absent because the coach data source exposes no mutation surface (08-REQ-052b); inspection replaces selection per the inspection provider (08-REQ-052c, §2.7's coach inspection gesture). Operator selection shadows produced by team members remain visible (08-REQ-052c). The presence display includes the coach with role badge `C` (or `A` for admins) per §2.8.
+
+---
+
+### 2.17 Platform Pages
+
+**Home view** (08-REQ-010a). A single page composed of three sections: (1) "My Teams" listing the user's current Centaur Team memberships per [05-REQ-011]; (2) "Recent Rooms" listing the most recently visited rooms (sourced from a small Convex side-table or, equivalently, from a client-local `localStorage` history that is non-authoritative — design discretion picks `localStorage` because it requires no schema addition and the recency list is purely a UX convenience); (3) "Games in Progress" listing every game with `status === "playing"` in which any of the user's Centaur Teams is participating, with each entry deep-linking to `/teams/[teamId]/live` on the team's nominated server (cross-server URL per §2.2).
+
+**Teams browser** (08-REQ-023a). Lists every team per [05-REQ-008] with name, display colour swatch, and current Captain display name; each row links to `/teams/[teamId]`.
+
+**Team Management** (08-REQ-023b through 08-REQ-023f). The view splits affordances by role: every member sees identity, members list, coaches list, server health; the Captain additionally sees mutating affordances for name, colour, server domain, member add/remove, coach add/remove (calls [05]'s `addCoach` / `removeCoach` per 08-REQ-023d), and Captain transfer. All mutating affordances render disabled with explanatory text while the team's `[05]` mid-game freeze is in effect (08-REQ-023e), driven by a reactive query against [05]'s game-status subscription. The view exposes no bot/heuristic affordances (08-REQ-023f) but links to `/teams/[teamId]/heuristic-config` and `/teams/[teamId]/bot-params`.
+
+**Player Profile** (08-REQ-090, 08-REQ-091, 08-REQ-091a, 08-REQ-092, 08-REQ-093, 08-REVIEW-016). Renders display name, current and historical team memberships, game history per the historical-or-current rule (08-REQ-091), aggregate stats. The page never references the user's email at any visibility — neither for the viewing user nor the profile owner (08-REQ-091a). Historical attributions resolve via the participating-team snapshot per [05-REQ-029], so an archived team continues to render under its historical identity (08-REQ-093, 08-REQ-103).
+
+**Team Profile** (08-REQ-094 through 08-REQ-098). Renders identity, members, server health, full game history, aggregate stats, head-to-head records. Game history includes every game the team participated in (cross-team-public per 08-REQ-095). Historical opponent attributions resolve via participating-team snapshots (08-REQ-097). The view is purely informational — no mutating affordances (08-REQ-098) — and links to `/teams/[teamId]/manage` for users with the appropriate scope.
+
+**Leaderboard** (08-REQ-094a through 08-REQ-094f). Renders a ranked list per a chosen criterion × time-window × optional room filter, with archived teams retained under their historical identity (08-REQ-094e). Each entry links to its Team Profile (08-REQ-094d). Authentication is required (08-REQ-094f); no email is exposed (08-REQ-091a).
+
+**API Key Management** (08-REQ-095a through 08-REQ-095d). Lists the user's active and revoked keys with label, creation timestamp, and revocation timestamp. The "Create API Key" action opens a modal that, on Convex acknowledgement of [05-REQ-051]'s creation, displays the plaintext exactly once with a "Copy to clipboard" button; dismissing the modal discards the plaintext (08-REQ-095b, 08-REQ-095c). A persistent informational banner explains that the key's authorisation scope is bounded by the user's own current scope per [05-REQ-047] (08-REQ-095d).
+
+**Admin experience** (§8.21, 08-REQ-096a, 08-REQ-096b, 08-REQ-009c). When `user.role === "admin"`:
+- The Teams browser lists all teams regardless of membership ([05-REQ-066]).
+- The home view's "Games in Progress" expands to include all platform games (admin discretion).
+- Replay viewer and coach-mode entry points are unconditionally available for any team in any game.
+- An `/admin` landing page links to admin-only utility views (e.g., a system healthcheck dashboard).
+
+The admin experience is read-only with respect to game state and Centaur-subsystem state (08-REQ-096b); admin actions never include staging moves or editing Centaur state for teams the admin is not a member of.
+
+---
+
+### 2.18 Error Handling and Invariant Rejection Display
+
+**Convex rejection feedback path** (08-REQ-100). Every mutation dispatched through the data source returns a `Promise<Result>` whose rejection branch carries the Convex-side error code and message. The application maintains a singleton toast bus (Svelte 5 store) that surfaces user-legible error messages anchored to the affordance that triggered them. Rejections are translated through a `convexErrorToHumanMessage(error)` helper that maps known Convex error codes to user-legible English strings; unknown errors render the raw Convex message verbatim with a "report issue" affordance. The UI never silently swallows a rejection.
+
+**Affordance enablement derivation** (08-REQ-101). Every affordance whose enablement is governed by a Convex-side invariant computes its `disabled` state from a Svelte 5 `$derived` rune over the relevant Convex reactive subscription. Examples: the room lobby's "Start Game" button is `$derived` from enrolled-teams count and per-team readiness; the Team Management view's mutating affordances are `$derived` from the team's mid-game-freeze status; the heuristic config page's Captain affordances are `$derived` from the role rune of §2.3. Where derivation is impossible (the invariant lives only inside a Convex mutation handler), the UI dispatches the mutation and routes the result through the §2.18 feedback path per 08-REQ-101's fallback clause.
+
+**Parameter snapshot vs defaults display** (08-REQ-102). Every view that surfaces a game's configuration reads the configuration from the game record's snapshot per [05-REQ-024], not from the room's current defaults. Room and game configuration views are explicitly distinct components in the codebase (`<RoomConfigEditor>` vs `<GameConfigViewer>`) so the two values cannot accidentally be confused at render sites.
+
+**Subscription loss surfacing** (08-REQ-083a). Each data source observes its underlying subscription's connection state and, on loss, emits a `subscriptionLost` event that the surrounding UI surfaces as a banner ("Connection lost, attempting to reconnect…"). Stale state is not fabricated; the affected components render their last-known values dimmed with a "stale" indicator, or render a placeholder if no value has ever been received. On recovery, the subscription resubscribes and the UI returns to fresh rendering.
+
+---
+
+### 2.19 Lifecycle and Session Boundaries
+
+**Live operator interface availability** (08-REQ-081a, 08-REQ-082a). The team-scoped layout's reactive query against `game.status` drives the `/teams/[teamId]/live` route's lifecycle: on the transition to `playing` the live operator interface mounts; on the transition to `finished` the interface unmounts and is replaced by a terminal state component showing final scores per [05-REQ-038] and a link to `/games/[gameId]/replay`. Mid-session lifecycle is purely reactive — no manual page navigation is required for either transition.
+
+**No client-side authoritative state** (08-REQ-084a). The application persists no authoritative state to client storage: `sessionStorage` holds only the timeline-control mode/speed preferences (§2.15.1), and `localStorage` holds only the home view's recent-rooms list (a UX convenience, non-authoritative). All operator-visible state derives from [04], [05], or [06] on every session, consistent with [07-REQ-057]'s posture for the framework.
+
+---
+
+### 2.20 Requirement Coverage Addendum
+
+The following design elements are short, citation-bearing notes for requirements whose substantive design is implicit in the architectural choices of §§2.1–2.19 or upstream-module exported interfaces but which warrant an explicit citation for traceability.
+
+- **Application scope** (08-REQ-001). The entire Design and Exported Interfaces sections of this module describe the unified human-facing web application of the Snek Centaur Platform; there is no separate "Game Platform" web application. §2.1's stack and topology, §2.2's routing topology covering both team-internal and platform-wide surfaces, and §3.6's library-surface table jointly satisfy the scope claim.
+- **Live-game prominence on navigation surface** (08-REQ-011). The home view's "Games in Progress" section (§2.17) lists every game with `status === "playing"` in which any of the user's Centaur Teams is participating, deep-linking to `/teams/[teamId]/live` on the team's nominated server. Additionally, the global header's primary navigation surface renders a persistent badge ("Live: 〈team name〉") for any hosted team currently in a `playing` game, derived reactively from the same Convex subscription, so an operator returning to the application lands on the live surface in one click without navigating into the team page first.
+- **Team creation affordance** (08-REQ-023c). The `/teams` browser (§2.17) exposes a primary "Create Team" button visible to every authenticated user; clicking dispatches [05]'s team-creation mutation per [05-REQ-008] / [05-REQ-011] and, on success, redirects the creator (now Captain per the same mutation) to the new team's `/teams/[teamId]/manage` view.
+- **Team game history view** (08-REQ-024, 08-REQ-025, 08-REQ-026, 08-REQ-027). The `/teams/[teamId]/games` route (§2.2) renders a reverse-chronological list of completed games filtered to the (a)/(b) eligibility set of 08-REQ-024 against the participating-team snapshot of [05-REQ-029]. Each row shows room name, date, opponent teams, the team's result, and final scores per [05-REQ-038] (08-REQ-025). Selecting a row navigates to `/games/[gameId]/replay?mode=team` defaulting to the team-perspective sub-turn view (08-REQ-026). The route's load function applies the negative gate of 08-REQ-027 by computing the eligibility set in the Convex query, so unrelated teams' games are never returned to the client.
+- **Room lobby read-only access for non-enrolled viewers** (08-REQ-027b). The room lobby route (§2.13) is reachable by every authenticated user; its layout binds every mutating affordance's `disabled` state to `$derived(role !== "owner" && !memberOfEnrolledTeam)`. Non-eligible viewers see the full lobby state — configuration, board preview, enrolled teams, readiness — but no editable widget.
+- **Owner/administrative-actor lobby affordances** (08-REQ-027c). The room lobby's owner-only affordance set is rendered when the layout-derived `isAdministrativeActor` flag is true, where the flag mirrors [05-REQ-017]'s definition (the room owner, or any authenticated user when no owner exists per [05-REQ-018]). Affordances exposed: every game-configuration parameter editor of [05-REQ-023] within its declared range (§2.13's configuration region), invite/remove enrolment controls, abdicate-ownership control per [05-REQ-018], and "Start Game" per 08-REQ-027h / [05-REQ-031].
+- **Selection vs manual mode** (08-REQ-029). Per §2.7's click-to-select gesture, the `selectSnake` mutation modifies only the selection record in [06]; it does not write `manual=true` to the snake's `snake_drives` / Centaur state. The data-source abstraction's `selectSnake` mutation (§3.2) and `setManualMode` mutation are deliberately separate so this property holds at the type level.
+- **Manual-mode entry/exit invariants** (08-REQ-030). The data-source abstraction (§3.2) exposes both `setManualMode({ manual: true | false })` and `stageMove({ direction })`; the live binding's `stageMove` implementation in `@snek-centaur/server-lib` performs an atomic `setManualMode(true) ⊕ stageMove` per [06-REQ-025]'s side-effect requirement. Unchecking the manual checkbox dispatches `setManualMode({ manual: false })` and the framework's automatic submission pipeline resumes per [07-REQ-040]. The UI never invents a third manual-mode entry path.
+- **No client-side scheduler logic** (08-REQ-031). The data-source abstraction publishes no compute-scheduling control surface; component code consumes published `SnakeBotStateSnapshot` values reactively and adds no scheduler hint of its own. Compute scheduling lives entirely in [07-REQ-040]'s framework-side priority pipeline.
+- **08-REQ-034 reservation note**. 08-REQ-034 is reserved per its own text (removed during 08-REVIEW-011 resolution); the design surface that satisfies the requirement's behavioural intent is the per-operator ready-state design of §2.10, which renders coordination state as per-operator presence per [08-REQ-032] and [06-REQ-040b]. No additional design element is needed.
+- **Direction-candidate gating on selector ownership** (08-REQ-043). The Drive management panel and move interface (§§2.7, 2.9) bind their root visibility to a `$derived` rune over `dataSource.snakeOperatorStates` filtered to `selectedBy === currentUserId`; non-selecting viewers see no candidate-direction interaction surface at all. Clicks on layer 5 candidate highlights are bound only when this derivation is truthy, structurally satisfying the negative requirement.
+- **Move interface direction buttons** (08-REQ-044). The move interface renders four direction buttons (Up, Down, Left, Right), each labelled with its direction's stateMap score read from `SnakeBotStateSnapshot.stateMap[direction]` per [07] §3.4 / [07-REQ-035] and coloured to match the layer-5 candidate highlight monotone ramp of §2.7. The currently-staged direction is rendered with an additional "staged" visual treatment by reading from `dataSource.stagedMoves`. Immediately-lethal directions per [01-REQ-044a] / [01-REQ-044b] are visually disabled (greyed) yet remain selectable as last-resort candidates per [07-REQ-019]; the data source's `stageMove` mutation does not refuse these directions.
+- **No separate commit affordance** (08-REQ-046). The move interface emits a `stageMove` mutation on each direction-button click; there is no "commit" button, no two-phase submit. The user-visible affordance design uses tense-shifted labels ("Stage Up" rather than "Commit Up") and a small banner under the four buttons ("Each click immediately stages — there is no separate commit step. Your turn ends when your team's Captain submits or the clock runs out.") to satisfy the awareness clause of 08-REQ-046.
+- **Manual checkbox** (08-REQ-047). The owned-snake control panel renders the `Manual` checkbox whenever the data source's `selectedBy === currentUserId` derivation is truthy. Its checked state binds to `snake_drives.manual` per [06-REQ-018] via the data source. Toggling on dispatches `setManualMode({ manual: true })` only — without an accompanying `stageMove`, so the currently-staged direction (whether bot-staged or human-staged) is preserved per the requirement's lock clause. Toggling off dispatches `setManualMode({ manual: false })`, returning the snake to the framework's submission pipeline.
+- **Persistence of Drive overrides across selection changes** (08-REQ-057). The Drive management panel reads from [06]'s `snake_drives` rows, which persist independent of selection per [06-REQ-016]. The UI never issues a destructive write on selection change; switching selected snake mounts a new `<DriveManagementPanel>` against the new snake's rows, leaving the prior snake's rows untouched. Per-snake temperature override (where applicable per [06]) is persisted to [06] in the same manner.
+- **Negative: no UI affordance for unregistered Drives** (08-REQ-058). The Drive dropdown's source set (§2.9) is the intersection `heuristic_config ∩ HEURISTIC_REGISTRY`; the UI never offers an "add new Drive type" affordance and never accepts free-form `heuristicId` input. New Drive types enter the system only via code-level expansion of the team's `@team-snek/heuristics` source per [06-REQ-005] and the lazy-insert path of §2.11.
+- **Leaderboard time-window and room filters** (08-REQ-094b, 08-REQ-094c). The Leaderboard view (§2.17) exposes (a) a criterion selector binding to the criteria set of [08-REQ-094a], (b) a time-window selector with the closed set `{all time, last 30 days, last 7 days}`, and (c) an optional room-filter typeahead bound to [05]'s rooms query. Each selection re-issues the leaderboard's Convex query with the corresponding parameters; the ranking computation lives Convex-side.
+- **Team Profile aggregate statistics** (08-REQ-096). The Team Profile view (§2.17) renders aggregate statistics derived from the team's full game history: games played, win rate, average score, and head-to-head records against every opponent team the team has ever played. Aggregates are computed Convex-side (no client aggregation, mirroring the discipline of 08-REQ-084b / 08-REVIEW-018) and surfaced on the profile alongside the per-game history.
+
+---
+
+## Exported Interfaces
+
+Module 08 has no downstream module per the dependency graph (Module 09 is absorbed into 08). The exported interfaces enumerated here are nonetheless load-bearing for fork authors and for the upstream contracts the application participates in (the invitation envelope from [05] / [03], the lazy-insert payload to [06] / [07]).
+
+### 3.1 Game Invitation Endpoint Contract
+
+Motivated by 08-REQ-005. The endpoint is the platform's load-bearing contact point between Convex (which sends invitations) and the Snek Centaur Server (which accepts them).
+
+```typescript
+// POST /.well-known/snek-game-invite
+// Content-Type: application/json
+
+export interface SnekGameInviteRequest {
+  // The full invitation envelope as defined by [03] §3.16.
+  // Carries the per-Centaur-Team game credential JWT (issued by Convex Auth's
+  // customJwt provider per [03] §3.15), the targeted (centaurTeamId, gameId),
+  // and the SpacetimeDB instance coordinates.
+  readonly envelope: GameStartInvitationEnvelope     // [03] exported type
+}
+
+export interface SnekGameInviteResponse {
+  readonly accepted: true
+  readonly alreadyAccepted: boolean                  // true iff this (team, game) was previously accepted
+  readonly serverInstance: {
+    readonly serverDomain: string                    // echoes back this server's nominatedServerDomain
+    readonly hostedTeamCount: number                 // operational visibility for [05]
+  }
+}
+
+// Failure responses use HTTP status codes 401 (signature invalid),
+// 403 (team not hosted by this server), 500 (bot framework boot failed).
+// All failure bodies are { error: string, code: string }.
+```
+
+### 3.2 Data-Source Abstraction
+
+Motivated by 08-REQ-076, 08-REQ-077, 08-REQ-078. This is the load-bearing surface between `@snek-centaur/server-lib` and the forked operator UI; replay-mode and coach-mode bindings structurally lack a mutation surface so component code cannot accidentally mutate (08-REQ-078, 08-REQ-052b).
+
+```typescript
+import type {
+  GameState, SnakeId, Direction, Cell,
+} from "@snek-centaur/engine"
+import type {
+  SnakeBotStateSnapshot,
+} from "@team-snek/bot-framework"
+import type {
+  ActionLogEntry, SnakeOperatorState,
+  HeuristicConfigRow, GameCentaurStateView,
+  OperatorReadyState,
+} from "@snek-centaur/server-lib"      // re-exports [06]'s exported view types
+
+// ───────────────────────────────────────────────────────────────────────────
+// Reactive read signals — common to all three bindings.
+// Each property is a Svelte 5 readable rune (subscribe to the rune in a
+// component's reactive context to read its current value).
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface ReadSignals {
+  readonly gameId: string
+  readonly currentTurn: () => number                                   // [04]
+  readonly boardState: () => GameState                                 // [04] / [05] reconstructed
+  readonly stagedMoves: () => ReadonlyMap<SnakeId, Direction>          // [04]
+  readonly chessTimer: () => {
+    readonly perTeamRemainingMs: ReadonlyMap<string /* teamId */, number>
+    readonly currentTurnEndAtMs: number | null
+  }
+  readonly snakeOperatorStates: () => ReadonlyArray<SnakeOperatorState>  // [06] §2.1.2
+  readonly snakeBotStates: () => ReadonlyMap<SnakeId, SnakeBotStateSnapshot>  // [06] §2.1.3 / [07] §3.4
+  readonly heuristicConfig: () => ReadonlyArray<HeuristicConfigRow>    // [06] §2.1.4
+  readonly gameCentaurState: () => GameCentaurStateView                // [06] §2.1.5
+  readonly operatorReadyStates: () => ReadonlyArray<OperatorReadyState> // [06] §2.1.5 / 06-REQ-040b
+  readonly actionLog: () => ReadonlyArray<ActionLogEntry>              // [06] §2.1.6
+  // Connection health is observable so §2.18 can surface subscription loss.
+  readonly connectionState: () => "connected" | "reconnecting" | "lost"
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Mutation surface — present only on the live binding.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface LiveMutations {
+  selectSnake(args: { snakeId: SnakeId; displace?: boolean }): Promise<MutationResult>
+  deselectSnake(args: { snakeId: SnakeId }): Promise<MutationResult>
+  setManualMode(args: { snakeId: SnakeId; manual: boolean }): Promise<MutationResult>
+  stageMove(args: { snakeId: SnakeId; direction: Direction }): Promise<MutationResult>
+  addDriveToSnake(args: {
+    snakeId: SnakeId; heuristicId: string;
+    target: { kind: "snake"; snakeId: SnakeId } | { kind: "cell"; cell: Cell };
+    weight: number;
+  }): Promise<MutationResult>
+  removeDriveFromSnake(args: { snakeId: SnakeId; driveId: string }): Promise<MutationResult>
+  updateDriveWeight(args: { driveId: string; weight: number }): Promise<MutationResult>
+  setOperatorReady(args: { ready: boolean }): Promise<MutationResult>
+  declareTurnOver(): Promise<MutationResult>          // Captain-only enforced by [06]/[04]
+}
+
+export type MutationResult =
+  | { ok: true }
+  | { ok: false; code: string; message: string }     // surfaced via §2.18
+
+// ───────────────────────────────────────────────────────────────────────────
+// Bindings.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface LiveDataSource extends ReadSignals {
+  readonly mode: "live"
+  readonly mutations: LiveMutations
+  dispose(): Promise<void>
+}
+
+export interface ReplayDataSource extends ReadSignals {
+  readonly mode: "replay"
+  readonly scrubber: ReplayScrubberControl              // §3.2.1 below
+  // No `mutations` field — structurally prevents replay-mode mutation (08-REQ-078).
+  dispose(): Promise<void>
+}
+
+export interface CoachDataSource extends ReadSignals {
+  readonly mode: "coach"
+  readonly coachedTeamId: string
+  // No `mutations` field — structurally prevents coach-mode mutation (08-REQ-052b).
+  dispose(): Promise<void>
+}
+
+export type DataSource = LiveDataSource | ReplayDataSource | CoachDataSource
+
+// Factories produced by @snek-centaur/server-lib.
+export function createLiveDataSource(args: {
+  gameId: string
+  centaurTeamId: string
+  gameCredential: string                              // per-Centaur-Team game credential JWT
+}): Promise<LiveDataSource>
+
+export function createReplayDataSource(args: {
+  gameId: string
+  participatingTeamId: string | null                  // null → board-level mode (08-REQ-070b)
+}): Promise<ReplayDataSource>
+
+export function createCoachDataSource(args: {
+  gameId: string
+  centaurTeamId: string                               // the team being coached
+  coachToken: string                                  // [05] §3.4 coach SpacetimeDB token
+}): Promise<CoachDataSource>
+```
+
+#### 3.2.1 Replay Scrubber Control
+
+Motivated by 08-REQ-072, 08-REQ-072a, 08-REQ-072b, 08-REQ-072c, 08-REQ-072d.
+
+```typescript
+export interface ReplayScrubberControl {
+  readonly mode: () => "per-turn" | "timeline"
+  setMode(mode: "per-turn" | "timeline"): void
+
+  // Cursor units differ by mode: turn index in per-turn mode, ms-since-game-start
+  // in timeline mode. The data source projects the same underlying state at the
+  // cursor position regardless of mode.
+  readonly cursor: () => number
+  setCursor(value: number): void
+
+  readonly playing: () => boolean
+  play(): void
+  pause(): void
+
+  readonly speedPerTurn: () => 0.25 | 0.5 | 1 | 2 | 4 | 8
+  setSpeedPerTurn(value: 0.25 | 0.5 | 1 | 2 | 4 | 8): void
+
+  readonly speedTimeline: () => 0.25 | 0.5 | 1 | 2 | 4 | 8
+  setSpeedTimeline(value: 0.25 | 0.5 | 1 | 2 | 4 | 8): void
+
+  // Turn marker positions for timeline-mode rendering.
+  readonly turnMarkers: () => ReadonlyArray<{ readonly turn: number; readonly atMs: number }>
+
+  // Game bounds (timeline mode renders this as the scrubber axis).
+  readonly gameStartMs: number
+  readonly gameEndMs: number
+  readonly turnCount: number
+}
+```
+
+### 3.3 Per-Operator Stable-Colour Function
+
+Motivated by 08-REQ-035, 08-REQ-039, 08-REQ-073. Used by the header presence display, the board's selection-shadow layer, the action log's per-operator attribution, and the replay viewer's reconstructed selection shadows. Colour must be stable for `(gameId, userId)` across all clients viewing the same game so coloured affordances are recognisable across browsers and reloads.
+
+```typescript
+// Returns one of 16 accessibility-screened hex colours, deterministically
+// from (gameId, userId). Distribution is balanced via a hash-mix.
+export function assignOperatorColour(gameId: string, userId: string): string
+
+// The palette is exported for test/forks; forks may swap palettes provided
+// the function remains deterministic in (gameId, userId).
+export const OPERATOR_COLOUR_PALETTE: ReadonlyArray<string>     // length 16
+```
+
+### 3.4 Presence Channel Shape
+
+Motivated by 08-REQ-032, 08-REQ-035, 08-REQ-064a. Specifies the per-presence-record shape installed in the `@convex-dev/presence` channel keyed `team:${centaurTeamId}:game:${gameId}`. Joined to [06]'s `operator_ready_state` rows reactively.
+
+```typescript
+export interface OperatorPresenceRecord {
+  readonly userId: string                          // resolves to a User per [05]
+  readonly role: "member" | "coach" | "admin"      // 08-REQ-064a quorum exclusion
+  readonly displayName: string                     // OAuth display name only (08-REQ-091a)
+  readonly colour: string                          // assignOperatorColour(gameId, userId)
+  readonly currentSelectionSnakeId: string | null  // mirrors [06]'s snake_operator_state
+}
+
+export const presenceChannelKey = (centaurTeamId: string, gameId: string): string =>
+  `team:${centaurTeamId}:game:${gameId}`
+```
+
+### 3.5 Lazy-Insert Invocation Contract
+
+Motivated by 08-REVIEW-021 and [07] §3.7's DOWNSTREAM IMPACT note. The application invokes [06]'s `insertMissingHeuristicConfig` mutation on every Captain visit to the global centaur params page (§2.11), supplying the registry projection produced by [07]'s `getRegisteredHeuristics`.
+
+```typescript
+import { getRegisteredHeuristics } from "@team-snek/heuristics"
+import { HEURISTIC_REGISTRY } from "@team-snek/heuristics"
+
+// Invocation signature consumed by [06]'s function contract:
+//   insertMissingHeuristicConfig({
+//     centaurTeamId,
+//     registrations: getRegisteredHeuristics(HEURISTIC_REGISTRY),
+//   }): Promise<{ inserted: ReadonlyArray<string /* heuristicId */> }>
+//
+// Caller authorisation: the Captain's Convex auth credential. Non-Captain
+// page visits do not invoke this mutation (08-REQ-017's Captain-only edit rule
+// applies symmetrically to inserts).
+//
+// Idempotence: the mutation is insert-only and never overwrites existing rows.
+// Per-team behaviour: invoked at most once per page visit; the returned
+// `inserted` list is surfaced to the Captain as a non-blocking toast.
+```
+
+### 3.6 Centaur-Lib Library Surface Summary
+
+Motivated by 08-REQ-076, 08-REQ-079, 08-REQ-080a. This is the consolidated list of types and functions a fork must depend on from `@snek-centaur/server-lib` (canonicalisation pending 08-REVIEW-022). Forks may freely modify Svelte components, layouts, routes, and styling; they must not modify or replace the items below if they intend to preserve compatibility with the platform.
+
+| Symbol | Source | Purpose |
+|---|---|---|
+| `createLiveDataSource`, `createReplayDataSource`, `createCoachDataSource` | §3.2 | Data-source bindings |
+| `LiveDataSource`, `ReplayDataSource`, `CoachDataSource`, `DataSource` | §3.2 | Type-level binding contract |
+| `ReadSignals`, `LiveMutations`, `MutationResult` | §3.2 | Reactive surface and mutation result |
+| `ReplayScrubberControl` | §3.2.1 | Unified timeline control state |
+| `assignOperatorColour`, `OPERATOR_COLOUR_PALETTE` | §3.3 | Per-operator stable colour |
+| `OperatorPresenceRecord`, `presenceChannelKey` | §3.4 | Presence channel shape |
+| `SnekGameInviteRequest`, `SnekGameInviteResponse` | §3.1 | Invitation endpoint contract |
+| `convexErrorToHumanMessage` | §2.18 | Convex rejection translation helper |
+| `startGameSession` (re-exported from [07] §3.3) | [07] | In-process bot framework boot from invitation handler |
+
+### 3.7 DOWNSTREAM IMPACT Notes
+
+None. Module 08 is a leaf in the dependency graph (Module 09 is absorbed into 08 as a redirect stub). The constraints this module's design imposes on its upstream dependencies are already recorded as DOWNSTREAM IMPACT items in those upstream modules' Phase 2 sections — notably [04]'s `scoreboard_view` per `04-REVIEW-020` (consumed by §2.14) and [06]/[07]'s `insertMissingHeuristicConfig` mutation (consumed by §2.11 and §3.5).
+
+---
+
 ## REVIEW Items
 
 ### 08-REVIEW-001: Role gating of heuristic configuration and bot parameters — **RESOLVED**
@@ -881,3 +1581,29 @@ The frontend's behaviour:
 **Affected requirements/design elements**: [07] §2.3, §2.18, §2.19, §3.1, §3.7 added in [07] Phase 2. [06] amended to add the `insertMissingHeuristicConfig` mutation per [07] §2.19. This module's frontend (Phase 2) imports `HEURISTIC_REGISTRY` from the workspace package and wires the lazy-insert call into the global centaur params page load lifecycle.
 
 **Informal spec reference**: §7.1 (heuristic configuration); §7.6 (Drive dropdown).
+
+---
+
+### 08-REVIEW-022: Centaur-lib package name inconsistency between [02] and [08]
+**Type**: Ambiguity
+**Phase**: Design
+**Context**: 08-REQ-076 names the published library package `@team-snek/centaur-lib`. [02] §2.13 / §2.16a (and [02-REQ-030] / [02-REQ-032a]) name the same artifact `@snek-centaur/server-lib`. Both names refer to the same artifact — the Snek Centaur Server library that exports the data-source abstraction (§3.2), the per-operator stable-colour function (§3.3), the presence channel shape (§3.4), the invitation endpoint contract (§3.1), and re-exports `startGameSession` from [07]. Module 08's Phase 2 design canonicalises on [02]'s name (`@snek-centaur/server-lib`) for consistency with the existing Phase-2-completed architectural module that pinned the package graph; the per-task instructions explicitly prohibit editing [02] from this module's Phase 2 task and direct that any cross-module cascade be filed as a REVIEW item rather than silently resolved.
+**Question**: Which of the two names is canonical going forward?
+**Options**:
+- A: Canonicalise on `@snek-centaur/server-lib` (matches [02], the platform-architecture module that owns package-graph decisions). Amend 08-REQ-076 to use this name.
+- B: Canonicalise on `@team-snek/centaur-lib` (matches 08-REQ-076 as currently written, plus aligns the prefix with `@team-snek/heuristics` per [02] §2.16a / [07-REVIEW-015]). Amend [02] §2.13 / §2.16a / [02-REQ-030] / [02-REQ-032a] to use this name.
+- C: Adopt a third name (e.g., `@team-snek/server-lib`) that aligns the namespace with `@team-snek/heuristics` and `@team-snek/bot-framework` while dropping the `centaur-lib` ambiguity. Amend both [02] and 08-REQ-076.
+**Informal spec reference**: §2 (architectural overview, package-graph language was not formalised in the informal spec).
+
+---
+
+### 08-REVIEW-023: Worst-case world annotations data substrate excised upstream
+**Type**: Gap
+**Phase**: Design
+**Context**: 08-REQ-049 specifies that annotations computed against the worst-case world (Voronoi-style territory overlay and any other team-configured annotations) shall be rendered against the worst-case world rather than the current board, sourced from the `annotations` field of the computed display state per [06-REQ-026]. However, the [07] Phase 2 resolution of 07-REVIEW-014 (and its two follow-up resolutions) excised the `WorldAnnotations` per-direction record from `SnakeBotStateSnapshot.worstCaseWorlds` and dropped the corresponding `snake_bot_state.annotations` column from [06]'s schema; the [07] §3.4 exported snapshot shape carries no annotations payload. The 07-REVIEW-014 resolution explicitly defers a replacement annotations design to "[08] Phase 2 once the operator UI's annotation needs are concrete" ([07] §2.11 narrative; [07] §3.6 removal note). This Phase 2 design pass for [08] does not have enough concrete annotation requirements (beyond the single Voronoi-style example named in 08-REQ-049) to design a replacement substrate without speculation, so layer 6 of the board renderer (§2.7) and the worst-case world preview (§2.9) currently render the simulated `state` only and surface no per-direction annotations.
+**Question**: How should the worst-case-world annotations substrate be reintroduced to satisfy 08-REQ-049, given that [07] §3.4 no longer publishes one and the open-shape `WorldAnnotations` design was rejected?
+**Options**:
+- A: Reintroduce a closed-set typed annotations payload on `SnakeBotStateSnapshot.worstCaseWorlds` enumerating exactly the operator-UI-visible annotations (e.g., `{ voronoiTerritory?: TerritoryMap }`); cascade into [07] §3.4, [06] §2.1.3, and [04] (no impact). Closed set keeps the wire shape stable and forces additions to be explicit cross-module amendments.
+- B: Compute annotations client-side in [08] from the published `SimulatedWorldSnapshot.state` using a small set of [08]-owned analysers (e.g., a Voronoi BFS over the simulated `GameState`). No upstream cascade, but [08] does work the framework previously did.
+- C: Drop annotations entirely from the MVP UI (treat 08-REQ-049 as a documented deferral with no design surface); revisit when concrete annotation needs are surfaced by users.
+**Informal spec reference**: §7.5 (worst-case world annotations); §7.6 (Voronoi territory display).
