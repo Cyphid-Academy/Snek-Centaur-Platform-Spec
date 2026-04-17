@@ -392,9 +392,12 @@ Satisfies 02-REQ-030, 02-REQ-032, 02-REQ-032a, 02-REQ-034.
 
 - The **shared game engine** package (e.g., `@snek-centaur/engine`) — domain types and turn-resolution logic consumed by all runtimes (02-REQ-034).
 - The **Snek Centaur Server library** package (e.g., `@snek-centaur/server-lib`) — bot framework, game invitation handler, healthcheck, Convex bindings, multi-tenant runtime, and data-layer APIs (02-REQ-030).
+- The **shared heuristics package** `@team-snek/heuristics` — the canonical heuristic registry plus Drive/Preference implementations, depended on by both the Snek Centaur Server library and the [08] SvelteKit web application. Depends only on `@team-snek/bot-framework`'s `Drive` / `Preference` / `HeuristicRegistration` types. *(Added per [07] 07-REVIEW-015 resolution; see [07] §2.3.)*
 - Platform infrastructure code (Convex functions, SpacetimeDB modules) that is not published as npm packages.
 
-Both the shared engine and the Snek Centaur Server library are published to npm from this monorepo.
+Both the shared engine and the Snek Centaur Server library are published to npm from this monorepo. The shared heuristics package is also published to npm (so forked web-app repositories can depend on it directly without inheriting server internals).
+
+**Package-graph note for `@team-snek/heuristics`.** The dependency edges induced by the shared heuristics package are: `@team-snek/heuristics` → `@team-snek/bot-framework` (types only); Snek Centaur Server library → `@team-snek/heuristics`; web app → `@team-snek/heuristics`. There is no edge from the web app to the Snek Centaur Server library induced by heuristic content, and no edge from `@team-snek/heuristics` back into either runtime. Heuristic-source edits rebuild a single workspace package and trigger downstream rebuilds of both runtimes uniformly. *(Per [07] 07-REVIEW-015 resolution.)*
 
 **Reference implementation repository.** A separate repository (e.g., `snek-centaur-server`) contains:
 

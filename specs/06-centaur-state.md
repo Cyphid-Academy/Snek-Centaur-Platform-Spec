@@ -37,9 +37,11 @@
 **06-REQ-011**: The subsystem shall persist, per Centaur Team, a **global centaur parameter record** (`global_centaur_params`) containing at minimum:
 - The softmax global temperature used for bot decisioning ([07]).
 - The **automatic submission time allocation** (`defaultAutomaticTimeAllocationMs`) — the per-snake auto-submission time allocation applied during gameplay per [07-REQ-044].
+- The **scheduled-submission interval** (`defaultScheduledSubmissionIntervalMs`) — the cadence at which the bot framework's scheduled-submission pass fires per [07-REQ-044]; default 100 ms.
+- The **imminent-deadline threshold** (`defaultImminentThresholdMs`) — the lead-time margin subtracted from the chess-clock deadline when arming the framework's final-submission timer per [07-REQ-045]; default 50 ms.
 - A `pinnedHeuristics` ordered array of heuristic IDs specifying Drive dropdown pinning order ([06-REQ-007]).
 
-These values serve as team-level defaults. At game start, they are copied into the game-scoped state record (`game_centaur_state`) and may be independently adjusted during the game without affecting the team defaults. *(Amended per 08-REVIEW-005 resolution: `pinnedHeuristics` added. Further amended per 08-REVIEW-011 resolution: `defaultOperatorMode` and `defaultTurn0AutomaticTimeAllocationMs` removed — operator-mode is replaced by per-operator ready-state per [06-REQ-040b]; turn-0 timing is now governed by the chess-clock's existing turn-0 budget without a separate auto-submission allocation.)*
+These values serve as team-level defaults. At game start, they are copied into the game-scoped state record (`game_centaur_state`) and may be independently adjusted during the game without affecting the team defaults. *(Amended per 08-REVIEW-005 resolution: `pinnedHeuristics` added. Further amended per 08-REVIEW-011 resolution: `defaultOperatorMode` and `defaultTurn0AutomaticTimeAllocationMs` removed — operator-mode is replaced by per-operator ready-state per [06-REQ-040b]; turn-0 timing is now governed by the chess-clock's existing turn-0 budget without a separate auto-submission allocation. Further amended per 07-REVIEW-012 resolution: `defaultScheduledSubmissionIntervalMs` and `defaultImminentThresholdMs` added — promoted from framework constants in [07] §3.5 to per-team bot parameters so cross-region hosting topologies can jointly retune both pipeline intervals.)*
 
 **06-REQ-012** *(negative)*: No runtime other than the Captain of the owning Centaur Team shall write to the bot parameter record. This is a restatement of [02-REQ-045] at the data layer and is enforced by function-contract checks in the subsystem. *(Amended per 08-REVIEW-001 resolution: bot parameter writes are Captain-only.)*
 
@@ -99,8 +101,9 @@ The term **selection** in this module refers exclusively to the exclusive-lock o
 **06-REQ-026**: For each snake in each active game the subsystem shall persist a **computed display state** comprising, at minimum:
 - A per-direction map of worst-case weighted scores (the "stateMap" in [07] terminology).
 - A per-direction representation of the worst-case simulated world used to produce each score, sufficient for the operator interface ([08]) to render the worst-case world preview.
-- A per-direction representation of any annotations computed against those worst-case worlds (e.g., territory overlays) that the operator interface renders.
 - A per-direction representation of the normalised per-heuristic outputs that produced each score, sufficient to drive the decision breakdown table in [08].
+
+*(Amended per 07-REVIEW-014 resolution: the prior per-direction `annotations` field is excised together with the framework's `WorldAnnotations` system. Further amended per the 07-REVIEW-014 follow-up resolution: the briefly-introduced snake-level `heuristicViolations` column is also excised — contract-violation diagnostics from author-supplied scoring functions are surfaced via the Snek Centaur Server's process log per 07-REQ-009b, not via Convex display state.)*
 
 **06-REQ-027**: The Snek Centaur Server hosting the owning Centaur Team shall be the sole writer of a snake's computed display state, authenticated via the per-Centaur-Team game credential ([05-REQ-032b]). No other runtime or identity shall write to it. (Paired with the action log writer rules in [06-REQ-037].)
 
@@ -135,7 +138,7 @@ Read access shall be scoped as follows. During a live (in-progress) game, a memb
 - Each snake's manual-mode flag at that moment.
 - Each snake's active Drives, their targets, and their weights at that moment.
 - Each snake's Preference activation states and weight overrides at that moment.
-- Each snake's per-direction stateMap, worst-case worlds, annotations, and heuristic outputs at that moment, as last written prior to that moment.
+- Each snake's per-direction stateMap, worst-case worlds, and heuristic outputs at that moment, as last written prior to that moment. *(Amended per 07-REVIEW-014 resolution: `annotations` removed. Further amended per the 07-REVIEW-014 follow-up resolution: the briefly-introduced `heuristicViolations` field is also removed — contract violations are server-log-only per 07-REQ-009b and are not part of the replayable display-state surface.)*
 - The current operator mode (Centaur or Automatic) at that moment.
 - Staged moves for each snake and the identity that staged them, at that moment (reconstructed from the STDB staged-moves append-only log, not the Centaur action log).
 - Temperature overrides in effect at that moment.
@@ -149,7 +152,7 @@ Read access shall be scoped as follows. During a live (in-progress) game, a memb
 - Heuristic weight and activation changes (snake, heuristic, old weight, new weight, old active state, new active state).
 - **Per-operator ready-state changes** (`operator_ready_toggled`: operator user identity, turn, new ready value).
 - Team-side turn submission events.
-- Computed display state snapshots (snake, stateMap, worst-case worlds, annotations, heuristic outputs), written as full snapshots per [06-REQ-028].
+- Computed display state snapshots (snake, stateMap, worst-case worlds, heuristic outputs), written as full snapshots per [06-REQ-028]. *(Amended per 07-REVIEW-014 resolution: `annotations` removed. Further amended per the 07-REVIEW-014 follow-up resolution: `heuristicViolations` is also not part of the snapshot — diagnostic violations are surfaced via the server process log per 07-REQ-009b.)*
 - Temperature override changes (snake, new value).
 
 *(Amended per 08-REVIEW-011 resolution: the `mode_toggled` event category is removed and replaced by `operator_ready_toggled`. There is no longer a team-level operator mode to toggle.)*
@@ -169,7 +172,7 @@ All other event categories may be written by either the Snek Centaur Server or a
 
 ### 6.9 Game-Scoped Team State
 
-**06-REQ-040a**: For each game, the subsystem shall persist a **game-scoped team state record** per CentaurTeam, containing at minimum `globalTemperature` and `automaticTimeAllocationMs`. All fields are initialised from the team's `global_centaur_params` defaults at game start and are independently mutable during the game. This record is the live source of truth for the effective parameter values during gameplay; downstream readers ([07], [08]) read it directly. (See resolved 06-REVIEW-008. *Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed — operator-mode is replaced by per-operator ready-state per [06-REQ-040b]; turn-0 timing is governed by the chess-clock's existing turn-0 budget without a separate auto-submission allocation.*)
+**06-REQ-040a**: For each game, the subsystem shall persist a **game-scoped team state record** per CentaurTeam, containing at minimum `globalTemperature`, `automaticTimeAllocationMs`, `scheduledSubmissionIntervalMs`, and `imminentThresholdMs`. All fields are initialised from the team's `global_centaur_params` defaults at game start and are independently mutable during the game. This record is the live source of truth for the effective parameter values during gameplay; downstream readers ([07], [08]) read it directly. (See resolved 06-REVIEW-008. *Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed — operator-mode is replaced by per-operator ready-state per [06-REQ-040b]; turn-0 timing is governed by the chess-clock's existing turn-0 budget without a separate auto-submission allocation. Further amended per 07-REVIEW-012 resolution: `scheduledSubmissionIntervalMs` and `imminentThresholdMs` mirrored from `global_centaur_params` defaults.*)
 
 **06-REQ-040b**: For each game, the subsystem shall persist a **per-operator ready-state record** in a dedicated table `operator_ready_state`. Each record is keyed by `(gameId, operatorUserId)` and carries at minimum a boolean `ready` flag, the `turn` for which the ready signal applies, and an `updatedAt` timestamp. Records are written exclusively by the operator they describe via the `setOperatorReady` mutation defined in §2.2.3. At the start of each turn (publish of the next authoritative pre-turn board state per [04]), every operator's `ready` flag for that game shall be reset to `false` (whether by explicit batch reset or by the contract that readers treat any record whose `turn` differs from the current turn as `not-ready`). Coaches and admins acting via implicit-coach permission ([05-REQ-066], [05-REQ-067]) shall not have records in this table — they have no ready-state per [08-REQ-064a]. The `setOperatorReady` mutation transactionally writes an `operator_ready_toggled` action-log entry per [06-REQ-036]. (Added per 08-REVIEW-011 resolution.)
 
@@ -231,11 +234,13 @@ global_centaur_params: defineTable({
   centaurTeamId: v.id("centaur_teams"),
   defaultGlobalTemperature: v.number(),
   defaultAutomaticTimeAllocationMs: v.number(),
+  defaultScheduledSubmissionIntervalMs: v.number(),
+  defaultImminentThresholdMs: v.number(),
   pinnedHeuristics: v.array(v.string()),
 }).index("by_team", ["centaurTeamId"])
 ```
 
-*(Schema amended per 08-REVIEW-011 resolution: `defaultOperatorMode` and `defaultTurn0AutomaticTimeAllocationMs` removed.)*
+*(Schema amended per 08-REVIEW-011 resolution: `defaultOperatorMode` and `defaultTurn0AutomaticTimeAllocationMs` removed. Further amended per 07-REVIEW-012 resolution: `defaultScheduledSubmissionIntervalMs` and `defaultImminentThresholdMs` added — defaults 100 ms and 50 ms respectively, mirrored to per-game `game_centaur_state` columns at `initializeGameCentaurState`.)*
 
 #### 2.1.2 Game-Scoped Per-Snake Operator State
 
@@ -272,14 +277,13 @@ snake_bot_state: defineTable({
   snakeId: v.number(),
   stateMap: v.any(),
   worstCaseWorlds: v.any(),
-  annotations: v.any(),
   heuristicOutputs: v.any(),
 })
   .index("by_game", ["gameId"])
   .index("by_game_snake", ["gameId", "snakeId"])
 ```
 
-- `stateMap`, `worstCaseWorlds`, `annotations`, and `heuristicOutputs` use `v.any()`, storing arbitrary JSON-serializable objects as native Convex values (not serialized strings). This allows downstream consumers to read them without deserialization and permits future narrowing to a static `v.object(...)` schema without migration. Full snapshots on every write ([06-REQ-028]).
+- `stateMap`, `worstCaseWorlds`, and `heuristicOutputs` use `v.any()`, storing arbitrary JSON-serializable objects as native Convex values (not serialized strings). This allows downstream consumers to read them without deserialization and permits future narrowing to a static `v.object(...)` schema without migration. Full snapshots on every write ([06-REQ-028]). *(Schema amended per 07-REVIEW-014 resolution: the prior `annotations` column is excised together with the framework's `WorldAnnotations` system. Further amended per the 07-REVIEW-014 follow-up resolution: the briefly-introduced `heuristicViolations` column is excised — diagnostic violations from author-supplied scoring functions are surfaced exclusively via the Snek Centaur Server's process log per 07-REQ-009b, not via Convex display state.)*
 - **Uniqueness invariant**: at most one document per `(gameId, snakeId)` pair; enforced by `initializeGameCentaurState` (creates exactly one per snake) and `updateSnakeBotState` (queries `by_game_snake` and patches in place).
 
 #### 2.1.4 Game-Scoped Per-Snake Drive and Override Tables
@@ -327,12 +331,14 @@ game_centaur_state: defineTable({
   centaurTeamId: v.id("centaur_teams"),
   globalTemperature: v.number(),
   automaticTimeAllocationMs: v.number(),
+  scheduledSubmissionIntervalMs: v.number(),
+  imminentThresholdMs: v.number(),
 }).index("by_game_team", ["gameId", "centaurTeamId"])
 ```
 
-- All fields are initialised from `global_centaur_params` at game start: `globalTemperature` from `defaultGlobalTemperature`, `automaticTimeAllocationMs` from `defaultAutomaticTimeAllocationMs`. Once initialised, each field is independently mutable during the game without affecting the team defaults.
+- All fields are initialised from `global_centaur_params` at game start: `globalTemperature` from `defaultGlobalTemperature`, `automaticTimeAllocationMs` from `defaultAutomaticTimeAllocationMs`, `scheduledSubmissionIntervalMs` from `defaultScheduledSubmissionIntervalMs`, `imminentThresholdMs` from `defaultImminentThresholdMs`. Once initialised, each field is independently mutable during the game without affecting the team defaults.
 - **Uniqueness invariant**: at most one document per `(gameId, centaurTeamId)` pair; enforced by `initializeGameCentaurState` (creates exactly one) and game-scoped mutations (query `by_game_team` and patch in place).
-- *(Schema amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed.)*
+- *(Schema amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed. Further amended per 07-REVIEW-012 resolution: `scheduledSubmissionIntervalMs` and `imminentThresholdMs` added — mirrored from the team's `global_centaur_params` defaults at `initializeGameCentaurState` and independently overridable per-game.)*
 
 **`operator_ready_state`** — Game-scoped per-operator ready-state record [06-REQ-040b]. One document per `(gameId, operatorUserId)`.
 
@@ -429,11 +435,13 @@ mutation upsertGlobalCentaurParams(args: {
   centaurTeamId: Id<"centaur_teams">,
   defaultGlobalTemperature: number,
   defaultAutomaticTimeAllocationMs: number,
+  defaultScheduledSubmissionIntervalMs: number,
+  defaultImminentThresholdMs: number,
   pinnedHeuristics: string[],
 }): void
 ```
 
-Authorization: caller must be the Captain of the specified CentaurTeam. *(Amended per 08-REVIEW-001 resolution: Captain-only. Amended per 08-REVIEW-005 resolution: `pinnedHeuristics` added. Amended per 08-REVIEW-011 resolution: `defaultOperatorMode` and `defaultTurn0AutomaticTimeAllocationMs` removed.)*
+Authorization: caller must be the Captain of the specified CentaurTeam. *(Amended per 08-REVIEW-001 resolution: Captain-only. Amended per 08-REVIEW-005 resolution: `pinnedHeuristics` added. Amended per 08-REVIEW-011 resolution: `defaultOperatorMode` and `defaultTurn0AutomaticTimeAllocationMs` removed. Further amended per 07-REVIEW-012 resolution: `defaultScheduledSubmissionIntervalMs` and `defaultImminentThresholdMs` added.)*
 
 #### 2.2.2 Game-Scoped Operator Mutations
 
@@ -537,10 +545,12 @@ mutation setGameParamOverrides(args: {
   centaurTeamId: Id<"centaur_teams">,
   globalTemperature: number,
   automaticTimeAllocationMs: number,
+  scheduledSubmissionIntervalMs: number,
+  imminentThresholdMs: number,
 }): void
 ```
 
-Patches the `game_centaur_state` document for the specified game and team. Authorization: caller must be a member of the CentaurTeam. *(Amended per 08-REVIEW-011 resolution: `turn0AutomaticTimeAllocationMs` removed.)*
+Patches the `game_centaur_state` document for the specified game and team. Authorization: caller must be a member of the CentaurTeam. *(Amended per 08-REVIEW-011 resolution: `turn0AutomaticTimeAllocationMs` removed. Further amended per 07-REVIEW-012 resolution: `scheduledSubmissionIntervalMs` and `imminentThresholdMs` added.)*
 
 #### 2.2.4 Computed Display State Mutations
 
@@ -552,12 +562,11 @@ mutation updateSnakeBotState(args: {
   snakeId: number,
   stateMap: any,
   worstCaseWorlds: any,
-  annotations: any,
   heuristicOutputs: any,
 }): void
 ```
 
-Authorization: caller must be authenticated via per-CentaurTeam game credential. The credential's `centaurTeamId` must match the snake's owning CentaurTeam. No operator or other Centaur Server may call this mutation. Writes a `statemap_updated` action log entry transactionally.
+Authorization: caller must be authenticated via per-CentaurTeam game credential. The credential's `centaurTeamId` must match the snake's owning CentaurTeam. No operator or other Centaur Server may call this mutation. Writes a `statemap_updated` action log entry transactionally. *(Signature amended per 07-REVIEW-014 resolution: `annotations` excised. Further amended per the 07-REVIEW-014 follow-up resolution: the briefly-introduced `heuristicViolations` field is also excised — diagnostic violations are surfaced via the Snek Centaur Server's process log per 07-REQ-009b.)*
 
 #### 2.2.5 Read Queries
 
@@ -628,7 +637,7 @@ Called by [05]'s game-start orchestration. This mutation:
 2. For each snake in `snakeIds`, creates a `snake_operator_state` document with `operatorUserId = null`, `manualMode = false`, `temperatureOverride = null`.
 3. For each snake, creates a `snake_bot_state` document with empty/default serialised fields.
 4. For each snake, creates `snake_heuristic_overrides` entries for all Preferences marked `activeByDefault = true` in the team's heuristic config, each with the default weight and `active = true`. No Drives are initialised ([06-REQ-014]).
-5. Creates a `game_centaur_state` document with all fields initialised from `global_centaur_params`: `globalTemperature` from `defaultGlobalTemperature`, `automaticTimeAllocationMs` from `defaultAutomaticTimeAllocationMs`. *(Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed.)*
+5. Creates a `game_centaur_state` document with all fields initialised from `global_centaur_params`: `globalTemperature` from `defaultGlobalTemperature`, `automaticTimeAllocationMs` from `defaultAutomaticTimeAllocationMs`, `scheduledSubmissionIntervalMs` from `defaultScheduledSubmissionIntervalMs`, `imminentThresholdMs` from `defaultImminentThresholdMs`. *(Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed. Further amended per 07-REVIEW-012 resolution: `scheduledSubmissionIntervalMs` / `imminentThresholdMs` mirroring added.)*
 6. No `operator_ready_state` rows are created at game-start — they are upserted lazily on the first `setOperatorReady` call from each operator per [06-REQ-040b]. *(Added per 08-REVIEW-011 resolution.)*
 
 Authorization: platform-level (called by Convex internal action during game-start orchestration).
@@ -714,7 +723,7 @@ const centaurActionEvent = v.union(
   v.object({
     type: v.literal("statemap_updated"), snakeId: v.number(),
     stateMap: v.any(), worstCaseWorlds: v.any(),
-    annotations: v.any(), heuristicOutputs: v.any(),
+    heuristicOutputs: v.any(),
   }),
   v.object({
     type: v.literal("temperature_changed"), snakeId: v.number(),
@@ -722,6 +731,8 @@ const centaurActionEvent = v.union(
   }),
 )
 ```
+
+*(`statemap_updated` variant amended per 07-REVIEW-014 resolution: `annotations` field excised. Further amended per the 07-REVIEW-014 follow-up resolution: the briefly-introduced `heuristicViolations` field is also excised — payload now mirrors the updated `snake_bot_state` schema, which carries no violations column. Diagnostic violations are surfaced via the Snek Centaur Server's process log per 07-REQ-009b.)*
 
 Each variant's `snakeId` field (where present) enables the `by_game_type_snake` index to efficiently answer queries like "latest `statemap_updated` for snake 3 in game X."
 
@@ -749,7 +760,7 @@ The `initializeGameCentaurState` mutation (§2.2.6) is called by [05]'s game-sta
 
 4. **Seed per-snake heuristic overrides**: For each snake, for each Preference in the team's heuristic config that has `activeByDefault = true`, create a `snake_heuristic_overrides` document with `weight = defaultWeight` and `active = true`. No Drive overrides are created (Drives start inactive; [06-REQ-014]).
 
-5. **Seed game-scoped team state**: Create a `game_centaur_state` document with all fields copied from `global_centaur_params`: `globalTemperature` from `defaultGlobalTemperature`, `automaticTimeAllocationMs` from `defaultAutomaticTimeAllocationMs`. *(Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed.)*
+5. **Seed game-scoped team state**: Create a `game_centaur_state` document with all fields copied from `global_centaur_params`: `globalTemperature` from `defaultGlobalTemperature`, `automaticTimeAllocationMs` from `defaultAutomaticTimeAllocationMs`, `scheduledSubmissionIntervalMs` from `defaultScheduledSubmissionIntervalMs`, `imminentThresholdMs` from `defaultImminentThresholdMs`. *(Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed. Further amended per 07-REVIEW-012 resolution: `scheduledSubmissionIntervalMs` / `imminentThresholdMs` mirroring added.)*
 
 6. **Operator ready-state**: No `operator_ready_state` rows are seeded; they are upserted lazily on the first `setOperatorReady` call from each operator per [06-REQ-040b]. *(Added per 08-REVIEW-011 resolution.)*
 
@@ -811,7 +822,7 @@ const centaurActionEvent = v.union(
   v.object({
     type: v.literal("statemap_updated"), snakeId: v.number(),
     stateMap: v.any(), worstCaseWorlds: v.any(),
-    annotations: v.any(), heuristicOutputs: v.any(),
+    heuristicOutputs: v.any(),
   }),
   v.object({
     type: v.literal("temperature_changed"), snakeId: v.number(),
@@ -833,6 +844,8 @@ export default defineSchema({
     centaurTeamId: v.id("centaur_teams"),
     defaultGlobalTemperature: v.number(),
     defaultAutomaticTimeAllocationMs: v.number(),
+    defaultScheduledSubmissionIntervalMs: v.number(),
+    defaultImminentThresholdMs: v.number(),
     pinnedHeuristics: v.array(v.string()),
   }).index("by_team", ["centaurTeamId"]),
 
@@ -854,7 +867,6 @@ export default defineSchema({
     snakeId: v.number(),
     stateMap: v.any(),
     worstCaseWorlds: v.any(),
-    annotations: v.any(),
     heuristicOutputs: v.any(),
   })
     .index("by_game", ["gameId"])
@@ -884,6 +896,8 @@ export default defineSchema({
     centaurTeamId: v.id("centaur_teams"),
     globalTemperature: v.number(),
     automaticTimeAllocationMs: v.number(),
+    scheduledSubmissionIntervalMs: v.number(),
+    imminentThresholdMs: v.number(),
   }).index("by_game_team", ["gameId", "centaurTeamId"]),
 
   operator_ready_state: defineTable({
@@ -948,8 +962,10 @@ interface CentaurStateMutations {
     centaurTeamId: Id<"centaur_teams">
     defaultGlobalTemperature: number
     defaultAutomaticTimeAllocationMs: number
+    defaultScheduledSubmissionIntervalMs: number
+    defaultImminentThresholdMs: number
     pinnedHeuristics: string[]
-  }): void
+  }): void   // Per 07-REVIEW-012 resolution: defaultScheduledSubmissionIntervalMs / defaultImminentThresholdMs added.
 
   selectSnake(args: {
     gameId: Id<"games">
@@ -1009,16 +1025,17 @@ interface CentaurStateMutations {
     centaurTeamId: Id<"centaur_teams">
     globalTemperature: number
     automaticTimeAllocationMs: number
-  }): void
+    scheduledSubmissionIntervalMs: number
+    imminentThresholdMs: number
+  }): void   // Per 07-REVIEW-012 resolution: scheduledSubmissionIntervalMs / imminentThresholdMs added.
 
   updateSnakeBotState(args: {
     gameId: Id<"games">
     snakeId: number
     stateMap: any
     worstCaseWorlds: any
-    annotations: any
     heuristicOutputs: any
-  }): void
+  }): void   // Per 07-REVIEW-014 resolution: annotations field excised. Per the 07-REVIEW-014 follow-up: heuristicViolations also excised — diagnostic violations go to the server process log per 07-REQ-009b.
 
   initializeGameCentaurState(args: {
     gameId: Id<"games">
@@ -1089,12 +1106,14 @@ interface EffectiveHeuristicEntry {
 type EffectiveHeuristicConfig = ReadonlyArray<EffectiveHeuristicEntry>
 ```
 
-**`GameCentaurStateView`** — the joined view of all game-scoped state for the operator interface. *(Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed; `operatorReady` view added per [06-REQ-040b].)*
+**`GameCentaurStateView`** — the joined view of all game-scoped state for the operator interface. *(Amended per 08-REVIEW-011 resolution: `operatorMode` and `turn0AutomaticTimeAllocationMs` removed; `operatorReady` view added per [06-REQ-040b]. Further amended per 07-REVIEW-012 / 07-REVIEW-014 resolutions: `scheduledSubmissionIntervalMs` and `imminentThresholdMs` added at the top level; per-snake `annotations` removed. Further amended per the 07-REVIEW-014 follow-up resolution: the briefly-introduced per-snake `heuristicViolations` field is also removed — diagnostic violations are surfaced via the Snek Centaur Server's process log per 07-REQ-009b, not via this view.)*
 
 ```typescript
 interface GameCentaurStateView {
   readonly globalTemperature: number
   readonly automaticTimeAllocationMs: number
+  readonly scheduledSubmissionIntervalMs: number
+  readonly imminentThresholdMs: number
   readonly operatorReady: ReadonlyArray<{
     readonly operatorUserId: Id<"users">
     readonly ready: boolean
@@ -1108,7 +1127,6 @@ interface GameCentaurStateView {
     readonly temperatureOverride: number | null
     readonly stateMap: any
     readonly worstCaseWorlds: any
-    readonly annotations: any
     readonly heuristicOutputs: any
     readonly drives: ReadonlyArray<{
       readonly driveType: string
