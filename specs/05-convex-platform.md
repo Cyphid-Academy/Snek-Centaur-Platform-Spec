@@ -377,7 +377,6 @@ export default defineSchema({
     centaurTeamId: v.id("centaur_teams"),
     rosterSnapshot: v.array(v.object({
       operatorUserId: v.id("users"),
-      email: v.string(),
       isCaptain: v.boolean(),
     })),
   })
@@ -1009,10 +1008,11 @@ These table names are guaranteed not to collide with Module 06's 8 Centaur-subsy
 
 **Exported table document types**:
 
+> **Note (08-REQ-091a / 08-REVIEW-016)** — *storage vs. exposure*: The underlying `users` table continues to store `email` at rest (required for OAuth identity matching per [03-REQ-008] and admin designation per §2.16). The exported `UserDoc` shape below represents the **user-scoped query/subscription surface** consumed by [08]/[09] for user-facing views (player profile, team-member listing, team management, game-history attribution, leaderboard, and any other user-facing surface) and therefore intentionally **omits** the `email` field per 08-REQ-091a. Email is returned only by (a) admin-only queries that bypass the user-scoped surface, and (b) [03]'s `resolveIdentity()` / `validateApiKey()` helpers, which act on the caller's own authenticated identity. Any future [05] query that selects from `users` for a user-facing consumer must project away the `email` field at the query boundary. Separately, `game_teams.rosterSnapshot` does **not** store `email` at all — it is a logical membership record (which `operatorUserId`s were on which team for a given game, plus which was Captain) and intentionally does not duplicate user metadata; consumers that need a display name resolve `operatorUserId` through the (email-free) `users` query path.
+
 ```typescript
 interface UserDoc {
   readonly _id: Id<"users">
-  readonly email: string
   readonly displayName: string
   readonly createdAt: number
   readonly archived: boolean
@@ -1073,7 +1073,6 @@ interface GameTeamDoc {
   readonly centaurTeamId: Id<"centaur_teams">
   readonly rosterSnapshot: ReadonlyArray<{
     readonly operatorUserId: Id<"users">
-    readonly email: string
     readonly isCaptain: boolean
   }>
 }
@@ -1462,7 +1461,7 @@ interface HttpApiContract {
 **Context**: The informal spec §7.5 designates a "timekeeper" role responsible for operator-mode toggling and turn submission. The original formal spec modeled this as a per-member role in a `roles` array alongside `captain`. During MVP specification, the timekeeper role was identified as unnecessary complexity: (a) no UI affordance for assigning the timekeeper role had been specified, (b) the capabilities assigned to the timekeeper (mode toggling, turn submission) are naturally captain-level actions, and (c) a separate role introduces edge cases around role assignment, freeze semantics, and authorization checking that add no value for the initial platform.
 **Decision**: Eliminate the timekeeper role entirely. Merge all timekeeper capabilities into the Captain. Captain designation is enforced structurally via `centaur_teams.captainUserId` (a reference to the captain's `users._id`), not via a per-member role field. The `centaur_team_members` table carries no role information — every member is an Operator. The `game_teams.rosterSnapshot` records each member's `isCaptain` boolean for historical attribution.
 **Rationale**: The Captain is already the team's designated authority for game-start readiness, roster management, and server domain nomination. Adding turn-submission and mode-toggling to the Captain's responsibilities is natural and avoids introducing a second privileged role that has no independent lifecycle management. If a future version needs a distinct timekeeper, it can be added as a new field on the team record (analogous to `captainUserId`) without schema migration of the membership table.
-**Affected requirements/design elements**: 05-REQ-011 amended (roles array removed; captain is structural property of team). 05-REQ-012 amended (timekeeper assignment removed; captain transfer via `captainUserId` update). 05-REQ-065 amended (simplified role language). Schema: `centaur_team_members.roles` field removed; `game_teams.rosterSnapshot` simplified to `{ operatorUserId, email, isCaptain }`. Module 06 amended: `toggleOperatorMode` authorization changed from timekeeper to captain; `turn_submitted` event attributed to captain; 06-REVIEW-008 context updated.
+**Affected requirements/design elements**: 05-REQ-011 amended (roles array removed; captain is structural property of team). 05-REQ-012 amended (timekeeper assignment removed; captain transfer via `captainUserId` update). 05-REQ-065 amended (simplified role language). Schema: `centaur_team_members.roles` field removed; `game_teams.rosterSnapshot` simplified to `{ operatorUserId, isCaptain }` *(per the 08-REVIEW-016 / 08-REQ-091a sweep: `email` removed from both the stored shape and the exported `GameTeamDoc.rosterSnapshot` — the snapshot is a logical membership record and does not duplicate user metadata; display names are resolved through the (email-free) `users` query path. Note that `users.email` is retained in storage for OAuth identity matching and admin operations, with exposure restricted to admin-only and caller-self surfaces.)*. Module 06 amended: `toggleOperatorMode` authorization changed from timekeeper to captain; `turn_submitted` event attributed to captain; 06-REVIEW-008 context updated.
 
 ---
 
