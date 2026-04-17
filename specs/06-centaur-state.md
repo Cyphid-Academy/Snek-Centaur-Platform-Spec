@@ -380,9 +380,22 @@ mutation deleteHeuristicConfig(args: {
   centaurTeamId: Id<"centaur_teams">,
   heuristicId: string,
 }): void
+
+mutation insertMissingHeuristicConfig(args: {
+  centaurTeamId: Id<"centaur_teams">,
+  registrations: ReadonlyArray<{
+    heuristicId: string,
+    heuristicType: "drive" | "preference",
+    defaultWeight: number,
+    activeByDefault: boolean | null,
+    nickname: string | null,
+  }>,
+}): { inserted: ReadonlyArray<string> }
 ```
 
 Authorization: caller must be the Captain of the specified CentaurTeam (Google OAuth identity → team membership + captain check via `centaur_teams.captainUserId`). *(Amended per 08-REVIEW-001 resolution: Captain-only.)*
+
+`insertMissingHeuristicConfig` has insert-only-never-overwrites semantics: for each entry in `registrations` whose `heuristicId` is not already present in the team's `heuristic_config`, a new row is inserted using the supplied `defaultWeight`, `activeByDefault`, and `nickname` as initial values; entries whose `heuristicId` is already present produce no write (existing Captain-edited values are preserved). Returns the list of newly inserted IDs. This mutation exists to discharge the lazy-insert contract in [07] §2.18 — it is invoked from [08]'s global centaur params page on Captain visits, not by the bot framework runtime, which is read-only with respect to `heuristic_config` per [07-REQ-018]. *(Added per [07] Phase 2 amendment §2.19, resolving [08]'s 08-REVIEW-021.)*
 
 **Global centaur params CRUD** — `upsertGlobalCentaurParams` [06-REQ-011, 06-REQ-012].
 
@@ -880,6 +893,17 @@ interface CentaurStateMutations {
     centaurTeamId: Id<"centaur_teams">
     heuristicId: string
   }): void
+
+  insertMissingHeuristicConfig(args: {
+    centaurTeamId: Id<"centaur_teams">
+    registrations: ReadonlyArray<{
+      heuristicId: string
+      heuristicType: "drive" | "preference"
+      defaultWeight: number
+      activeByDefault: boolean | null
+      nickname: string | null
+    }>
+  }): { inserted: ReadonlyArray<string> }   // Captain-only; insert-only-never-overwrites; per [07] §2.19
 
   upsertGlobalCentaurParams(args: {
     centaurTeamId: Id<"centaur_teams">

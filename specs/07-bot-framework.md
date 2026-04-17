@@ -35,6 +35,15 @@
 
 **07-REQ-009**: All heuristic scalar outputs — Drive reward, Drive motivation, Drive terminal reward on satisfaction, and Preference value — shall lie in [−1, 1]. Calibration of relative importance shall be expressed exclusively through portfolio weights ([06-REQ-013], 07-REQ-014), never by scaling heuristic outputs outside this range.
 
+**07-REQ-009a**: The framework shall **strictly enforce** the range invariants on every author-supplied scalar output before that value is consumed by any downstream framework computation (caching, scoring aggregation, softmax, display state). Heuristic implementations are expected to be authored by inexperienced developers (often with AI assistance) and cannot be relied on to honour the invariants voluntarily; the framework treats an out-of-range or non-finite output as a heuristic bug to be defended against, not as a rare exception. Specifically, on every invocation of any author-supplied scoring function the framework shall:
+
+1. Validate that the returned value is a finite `number` (not `NaN`, not `±Infinity`, not `undefined`, not a non-number type).
+2. Validate the declared range for the function: `[−1, 1]` for `reward`, `motivation`, satisfaction terminal reward, and Preference `evaluate`; `≥ 0` and finite for Drive `distance`; strictly boolean for `satisfaction`.
+3. **Substitute a safe value** when validation fails — clamp out-of-range numeric outputs to the nearest in-range bound; substitute `0` for non-finite or non-number outputs in `[−1, 1]`-bounded functions; substitute `0` for non-finite/negative `distance`; coerce non-boolean `satisfaction` to `false`. The substituted value is what the rest of the framework consumes — no NaN, ±Infinity, or out-of-range value is ever propagated into caches, scores, softmax, or `snake_bot_state`.
+4. **Record a structured violation event** (see 07-REQ-009b) the first time each `(snakeId, heuristicId, violationKind)` triple violates within a turn, so authors can see and fix the bug.
+
+**07-REQ-009b**: The framework shall expose violation events on `snake_bot_state.annotations` (per [06-REQ-013] of the bot-state contract; see §3.4 of this module) as a deduplicated list of `HeuristicViolation` records, each carrying `heuristicId`, `violationKind` (`out_of_range` | `non_finite` | `wrong_type`), the offending raw value (rendered as a string for non-finite/non-number cases), the substituted value used by the framework, and a turn-scoped first-seen timestamp. Deduplication is per-turn per `(snakeId, heuristicId, violationKind)`; the violations list resets when the turn changes (consistent with the per-turn cache lifecycle of 07-REQ-026/027). [08]'s operator UI shall surface these violations prominently to operators (see §3.7's [08] DOWNSTREAM IMPACT note).
+
 **07-REQ-010**: When a Drive's satisfaction predicate evaluates to true in a simulated board state, the Drive's contribution to that world's score shall be the Drive's reward operation applied in that world (the **terminal reward**), bypassing distance dampening and the motivation operation. A Drive whose satisfaction predicate evaluated to true in a given turn's observed state shall be removed from the snake's active portfolio at the turn's close.
 
 **07-REQ-011**: The framework shall distinguish **Goal** and **Fear** variants of a Drive only as author-level semantics: a Goal is a Drive whose reward operation returns positive values in typical configurations; a Fear is a Drive whose reward operation returns negative values. The framework shall treat Goals and Fears identically at runtime. (Restates §6.1 for clarity.)
@@ -159,7 +168,7 @@ Within each tier, compute shall be allocated round-robin across snakes.
 
 **07-REQ-045**: The framework shall execute a **final submission** pass when the dynamically computed turn deadline is imminent, flushing all automatic-mode snakes whose dirty flag is still set. The turn deadline shall be calculated dynamically each turn as: `min(automaticTimeAllocationMs, remainingTimeBudget)` where `automaticTimeAllocationMs` is the game-scoped centaur parameter from [06-REQ-040a] (always shorter than the max turn duration from the engine), and `remainingTimeBudget` is the team's current chess clock budget observable from SpacetimeDB. The smaller of the two takes precedence. On turn 0, `turn0AutomaticTimeAllocationMs` (also from [06-REQ-040a]) replaces `automaticTimeAllocationMs`. The threshold at which the deadline is considered "imminent" is a design-phase decision. The scheduled submission pipeline (07-REQ-044) continues to operate normally right up until the turn is declared over.
 
-**07-REQ-045a**: When an operator (timekeeper) manually triggers immediate turn submission (`declareTurnOver`), the framework shall **not** execute a final flush of dirty automatic-mode snake states. The manual submission action reflects human discretion that the current total set of staged moves is acceptable for immediate submission. Flushing dirty states would cause new softmax rolls after the human decision with no opportunity for humans to respond, which contradicts the purpose of manual override. Only automatic deadline expiry triggers the final flush described in 07-REQ-045.
+**07-REQ-045a**: When the Captain manually triggers immediate turn submission (`declareTurnOver`), the framework shall **not** execute a final flush of dirty automatic-mode snake states. The manual submission action reflects human discretion that the current total set of staged moves is acceptable for immediate submission. Flushing dirty states would cause new softmax rolls after the human decision with no opportunity for humans to respond, which contradicts the purpose of manual override. Only automatic deadline expiry triggers the final flush described in 07-REQ-045.
 
 **07-REQ-046**: Manual-mode snakes — whether currently selected or not — shall never be staged by the scheduled or final submission passes. Their staged moves shall originate exclusively from operator action routed through [08]'s live operator interface. This discharges 07's share of the manual/auto staging split in [06-REQ-018].
 
@@ -230,6 +239,753 @@ Within each tier, compute shall be allocated round-robin across snakes.
 **07-REQ-063**: Every computed display state snapshot the framework writes per 07-REQ-039 shall correspond to an action log entry of category "computed display state snapshot" per [06-REQ-036] and [06-REQ-037].
 
 **07-REQ-064** *(negative)*: The framework shall not write action log entries for operator-originated events (selection, manual-mode toggles, operator-initiated Drive edits, etc.). Those entries are written by the originating operator per [06-REQ-037]'s non-reserved categories (see resolved 06-REVIEW-003).
+
+---
+
+## Design
+
+### 2.1 Runtime Architecture: Coordinating Worker per CentaurTeam
+
+Satisfies 07-REQ-001, 07-REQ-005, 07-REQ-040, 07-REQ-041, 07-REQ-057, 07-REQ-058, 07-REQ-060, 07-REQ-061.
+
+The bot framework runs inside the Snek Centaur Server process ([02-REQ-004]) as a library that the server boots once per active game per hosted CentaurTeam. The architecture is **one coordinating worker per CentaurTeam game session, plus a process-wide pool of simulation workers**:
+
+- **Coordinator (one per `(centaurTeamId, gameId)` pair)**: a single-threaded Node.js Worker thread that owns all reactive state for the team's game — the game tree caches, stateMaps, dirty flags, portfolio mirrors, lattice traversal queues, the per-snake compute scheduling round-robin, and the SpacetimeDB and Convex subscriptions for that game. The coordinator never blocks on simulation; it only orchestrates.
+- **Simulation worker pool (process-wide, sized to CPU cores − 1)**: stateless Node.js Worker threads that receive `SimulateRequest` messages (a candidate self-direction + a foreign-move tuple + the current pre-turn `GameState`) and return `SimulateResponse` messages (the resulting `GameState` and the per-heuristic normalised outputs computed against it via the team's registered heuristic implementations). Workers import the shared engine ([02]'s shared codebase) and the team's heuristic registry (§2.3) at boot time.
+- **Process-level simulation dispatcher (one per process, distinct from the per-team coordinators)**: a thin scheduler component in the framework process that owns the pool's idle-worker registry and a single fair queue of `SimulateRequest`s drawn from all coordinators. Each coordinator submits its own team's requests (with the per-team three-tier priority tag from §2.12) into this dispatcher; the dispatcher round-robins across coordinators when picking the next request to assign to an idle worker so that one team's heavy turn cannot starve another team's compute. The dispatcher carries no per-team game state — it knows only `(coordinatorId, priorityTag, payload)`. Cross-team isolation is preserved at two levels: (a) each coordinator only ever submits and receives requests for its own team, so its in-memory state is never touched by another team's coordinator; (b) the dispatcher's payload is the team-specific snapshot the worker operates on, so a worker handling team A's request never observes team B's state. No coordinator reads, subscribes to, or otherwise touches another CentaurTeam's Convex documents or SpacetimeDB instance (07-REQ-061).
+
+Rationale for one-coordinator-per-team rather than one process-wide coordinator: the reactive inputs (07-REQ-020) are per-team and per-game, the SpacetimeDB subscription is per-game, and the Convex subscription is per-team-per-game. Co-locating that state inside one thread eliminates cross-team locking. The simulation worker pool is shared because simulations are stateless and CPU-bound — pooling amortises thread startup cost and lets a single team's compute-heavy turn use all cores when other teams are idle.
+
+The coordinator subscribes to two reactive sources for its `(centaurTeamId, gameId)`:
+
+- The Centaur state subsystem ([06-REQ-043]) via Convex's reactive query interface, watching the joined `GameCentaurStateView` (heuristic config, overrides, drives, operator state, bot params) and `getEffectiveHeuristicConfig` per snake (§3.4 of [06]).
+- The team's game's SpacetimeDB instance ([02-REQ-023]) via the SpacetimeDB SDK, with subscriptions covering: pre-turn board state, staged moves, turn number, and the team's chess clock state.
+
+The coordinator owns and is the **sole writer** of `snake_bot_state` for snakes owned by its team (07-REQ-004), via `updateSnakeBotState` in [06]'s function contract surface using the per-CentaurTeam game credential ([05-REQ-032b]). It writes nothing else to Convex on operator behalf (07-REQ-018, 07-REQ-059, 07-REQ-064). It writes nothing to SpacetimeDB except staged moves via `stage_move` ([04-REQ-024]) for automatic-mode snakes (07-REQ-005, 07-REQ-046).
+
+---
+
+### 2.2 Heuristic Type Vocabulary
+
+Satisfies 07-REQ-006, 07-REQ-007, 07-REQ-008, 07-REQ-009, 07-REQ-010, 07-REQ-011, 07-REQ-012.
+
+Drives and Preferences are TypeScript classes/objects implementing the interfaces in §3.2. The framework treats them as opaque pure functions over a `(self, target, simulatedBoard)` triple, with the framework-supplied normalised-output cache (§2.8) memoising their results per cached world.
+
+Drive operations are split into three categories by purity contract:
+
+1. **Pure scoring functions** (`reward`, `distance`, `motivation`, `satisfaction`): invoked by the simulation worker against a simulated `GameState` to populate the per-world normalised output record. Outputs in [−1, 1] for reward/motivation/terminal-reward, non-negative for distance, boolean for satisfaction. The framework **strictly validates and substitutes** every author-supplied scalar at the simulation-worker boundary before it is written into the cache (07-REQ-009a): each invocation is wrapped by a thin guard that (a) checks the value is a finite `number` of the expected type, (b) clamps numeric outputs to the declared range (`[−1, 1]` for reward/motivation/terminal-reward and Preference value, `≥ 0` and finite for distance) or coerces booleans, (c) substitutes a safe in-range value (clamp endpoint, `0` for non-finite numerics, `false` for non-boolean satisfaction) when the raw value is invalid, and (d) records a `HeuristicViolation` annotation (07-REQ-009b) the first time each `(snakeId, heuristicId, violationKind)` violates within the current turn. Author exceptions thrown synchronously from a scoring function are caught by the same guard, treated as `wrong_type` violations, and substituted with the safe default for that function — a thrown heuristic must not crash the worker or the coordinator. The framework still makes no assumption about the algebraic *shape* of valid in-range outputs (07-REQ-012 — no monotonicity, symmetry, etc.); the guard rails enforce only the boundary contract, not author intent.
+2. **Pure structural predicates** (`targetEligibility`): invoked by [08]'s operator UI (and by the framework on portfolio mutation) to filter the operator's target picker. Pure over `(candidateTarget, self, board)`. The framework caches eligibility results keyed by `(driveId, candidateTargetRef, boardHash)` only opportunistically; recomputation on every poll is acceptable.
+3. **Pure structural enumerators** (`selfDirectionNomination`, `foreignMoveNomination`): invoked by the coordinator on every reactive-input change that could alter their output (Drive add/remove/retarget on this snake, Drive add/remove on any of *this snake's nominated foreign targets*, fresh pre-turn board). Outputs are sets of `Direction` values. They feed the interest map (§2.7).
+
+Drive `motivation(reward, distance) => number` is a **pure combiner** taking the two scalars produced by `reward` and `distance` and returning a value in [−1, 1]. The framework computes `reward` and `distance` first against the simulated world, then calls `motivation(reward, distance)`. The framework imposes no canonical formula (e.g., `reward / (1 + distance)`) — authors choose. This separation is design-load-bearing for two reasons: (a) it enables the satisfaction terminal-reward path (07-REQ-010), which bypasses `motivation` and uses `reward` directly; (b) it enables Drive authors to write `motivation` as a simple closed-form combiner rather than re-deriving the world from scratch.
+
+Goal vs Fear (07-REQ-011) is purely an authoring convention; the framework's runtime has no `kind: "goal" | "fear"` enum. Authors signal Fears by returning negative values from `reward` in typical configurations. Conservative-minimax aggregation (§2.11) then naturally penalises directions that incur Fear-magnitude rewards in the worst-case world.
+
+---
+
+### 2.3 Heuristic Registry: Build-Time-Shared TypeScript Module
+
+Satisfies 07-REQ-001, 07-REQ-014, 07-REQ-016, 07-REQ-018; resolves [08]'s 08-REVIEW-021.
+
+The Snek Centaur Server's Drive and Preference implementations and the SvelteKit frontend's heuristic-driven UI affordances (Drive dropdown, target picker, decision-table heuristic columns) must agree on the set of heuristic IDs the server recognises. They share one TypeScript module:
+
+```typescript
+// packages/centaur-server/src/heuristics/registry.ts
+import type { Drive, Preference, HeuristicRegistration } from "@team-snek/bot-framework"
+
+export const HEURISTIC_REGISTRY: ReadonlyArray<HeuristicRegistration> = [
+  {
+    heuristicId: "FoodDrive",
+    heuristicType: "drive",
+    nickname: "Food",
+    defaultWeight: 1.0,
+    activeByDefault: null,             // Drives are never active by default
+    targetType: "cell",
+    implementation: () => new FoodDrive(),
+  },
+  {
+    heuristicId: "AvoidWallsPreference",
+    heuristicType: "preference",
+    nickname: "Avoid Walls",
+    defaultWeight: 0.7,
+    activeByDefault: true,
+    targetType: null,
+    implementation: () => new AvoidWallsPreference(),
+  },
+  // ... more
+]
+```
+
+The bot framework's runtime imports `HEURISTIC_REGISTRY` directly. The SvelteKit frontend imports the same module via the monorepo workspace ([02]'s shared codebase). Because both consumers compile against the same source file at build time, drift between "what the server can simulate" and "what the UI can render" is **structurally impossible within one build artifact** — a fresh server deployment ships with a single registry that both runtime and UI agree on.
+
+Rationale for build-time-shared import over a runtime-published store (e.g., a SvelteKit init-time fetch from the bot framework over an internal HTTP endpoint):
+
+- **Eliminates a class of races**: a runtime store would be a separate fetch with its own loading state, error path, and cache invalidation. The UI would need to handle "registry not yet loaded" everywhere it filters on heuristics. The build-time import is statically available.
+- **TypeScript end-to-end**: the registry's element type carries the `heuristicId` literal types into the UI's component props, enabling exhaustive case analysis when the UI renders heuristic-specific affordances.
+- **No new wire protocol**: avoids defining a new server-internal HTTP endpoint, its auth model, and its caching policy.
+
+The trade-off is that hot-reloading the registry requires a server rebuild and restart — acceptable because heuristic implementations are framework code, not user data, and the team's deployment cadence already requires a rebuild for any heuristic logic change.
+
+The registry is the source of truth for which heuristic IDs the **running server** recognises. It is layered against the team's persisted `heuristic_config` in Convex ([06] §2.1.1) as follows:
+
+- **Drift direction (a) — registered but unconfigured** (heuristic IDs in `HEURISTIC_REGISTRY` with no matching `heuristic_config` row for the team): handled by the lazy-insert contract in §2.18.
+- **Drift direction (b) — configured but unregistered** (heuristic IDs in `heuristic_config` with no matching `HEURISTIC_REGISTRY` entry): retained in the table, ignored by the framework runtime (07-REQ-016 reads only the intersection), surfaced only on [08]'s global centaur params page where the Captain can delete stale entries (per 08-REVIEW-021 resolution updated below).
+- **Precedence**: `heuristic_config.defaultWeight`, `.activeByDefault`, and `.nickname` override the registry's `defaultWeight`/`activeByDefault`/`nickname` for any heuristic ID present in both — once written, Convex is authoritative for those fields. The registry's `defaultWeight`/`activeByDefault`/`nickname` are seed values used by the lazy-insert (§2.18) when creating a new `heuristic_config` row, and as fallbacks for in-memory portfolio initialisation if the row is somehow absent at simulation time (defence in depth).
+- **In-game Drive dropdown source**: the **intersection** `heuristic_config ∩ HEURISTIC_REGISTRY` filtered to `heuristicType = "drive"` and ordered per [06-REQ-007]'s pinned-then-lexicographic scheme. This intersection is computed in the SvelteKit UI by joining the Convex subscription on `heuristic_config` against the build-time-imported registry's IDs. It is not exposed by the framework as a separate Convex query — joining client-side is cheaper than a per-render Convex query and avoids adding a runtime endpoint.
+
+---
+
+### 2.4 Portfolio State and Reactive Subscription
+
+Satisfies 07-REQ-013, 07-REQ-014, 07-REQ-015, 07-REQ-016, 07-REQ-017, 07-REQ-018, 07-REQ-058.
+
+The coordinator holds an in-memory **portfolio mirror** per owned snake derived from the latest Convex reactive snapshot:
+
+```typescript
+interface PortfolioMirror {
+  readonly snakeId: SnakeId
+  readonly preferences: ReadonlyArray<{
+    readonly heuristicId: string
+    readonly weight: number              // effective: override ?? team default
+    readonly active: boolean             // effective: override ?? team default
+    readonly impl: Preference            // resolved via HEURISTIC_REGISTRY
+  }>
+  readonly drives: ReadonlyArray<{
+    readonly driveType: string
+    readonly target: Target              // discriminated union (SnakeTarget | CellTarget); see §3.2
+    readonly weight: number              // portfolioWeight from snake_drives
+    readonly impl: Drive<SnakeTarget> | Drive<CellTarget>  // resolved via HEURISTIC_REGISTRY
+  }>
+  readonly effectiveTemperature: number  // override ?? team default
+}
+```
+
+The mirror is rebuilt from scratch on every snapshot the coordinator's `GameCentaurStateView` subscription delivers. Because the snapshot is delivered transactionally per Convex's OCC semantics, the mirror is always internally consistent — there is no moment in which weight changes appear without their accompanying activation changes, etc. Portfolio mirror rebuilds are O(per-snake-portfolio-size) and run on the coordinator thread; there is no need to diff against the previous mirror because §2.7's reactive-input recomputation is cheap.
+
+Portfolio initialisation at game start (07-REQ-014) requires no special framework logic: `initializeGameCentaurState` ([06] §2.2.6) seeds `snake_heuristic_overrides` from the team's `heuristic_config` `activeByDefault` Preferences before the coordinator subscribes, so the first snapshot the coordinator sees already reflects the seeded portfolio. The coordinator does not need to re-read `heuristic_config` at game start — the per-snake `EffectiveHeuristicConfig` query ([06] §3.3) folds team defaults into the snake's effective view.
+
+Drives whose `target` cannot be resolved against the current pre-turn board (e.g., a Snake target referring to a snake that died last turn) are omitted from the active portfolio mirror for the next turn (07-REQ-017). The framework does not delete the underlying `snake_drives` row — that is operator-initiated cleanup. The omission causes the Drive to contribute nothing to the next turn's lattice or scoring; if the target later becomes resolvable again (rare but possible for cell targets after board mutations), the Drive re-enters the mirror automatically on the next snapshot.
+
+---
+
+### 2.5 Candidate Direction Enumeration
+
+Satisfies 07-REQ-019.
+
+For each owned snake on each fresh pre-turn board, the coordinator enumerates candidates from `{Up, Right, Down, Left}` as follows:
+
+1. Filter directions that would be immediately lethal on the **observed pre-turn board** (not on a simulated future board): wall collision per [01-REQ-044a] and self-collision per [01-REQ-044b]. Lethal-direction detection runs the shared engine's collision predicates against the pre-turn snake body and the static board geometry.
+2. If at least one non-lethal direction remains, the candidate set is the non-lethal subset.
+3. If all four directions are lethal, the candidate set is the full `{Up, Right, Down, Left}` set (last-resort fallback ensuring the stateMap is a total function on at least one direction per 07-REQ-003).
+
+Foreign-snake collision and food/potion outcomes are *not* considered in candidate filtering — those depend on the foreign snake's choice and on the simulated world. The candidate filter is the cheapest possible up-front pruning so that the lattice (§2.9) doesn't waste compute on directions that walk into walls.
+
+---
+
+### 2.6 Game Tree Cache Data Structure
+
+Satisfies 07-REQ-021, 07-REQ-022, 07-REQ-023, 07-REQ-024, 07-REQ-025, 07-REQ-026, 07-REQ-031.
+
+Per owned snake, per candidate direction, the coordinator maintains:
+
+```typescript
+interface SnakeCacheEntry {
+  readonly snakeId: SnakeId
+  readonly direction: Direction
+  // Map from a foreign-move tuple (canonicalised as a string of (foreignSnakeId,direction)
+  // pairs sorted by foreignSnakeId) to the cached simulated world's normalised outputs.
+  readonly worlds: Map<ForeignTupleKey, CachedWorld>
+}
+
+interface CachedWorld {
+  readonly foreignTuple: ReadonlyMap<SnakeId, Direction>
+  readonly simulatedState: GameState                // post-turn-resolution
+  readonly perDriveOutputs: ReadonlyMap<DriveInstanceKey, {
+    readonly reward: number
+    readonly distance: number
+    readonly motivation: number
+    readonly satisfied: boolean
+  }>
+  readonly perPreferenceOutputs: ReadonlyMap<string, number>
+}
+```
+
+`DriveInstanceKey` is `(driveType, targetType, targetId)` — the same tuple that uniquely identifies a `snake_drives` row. Multiple Drive instances of the same `driveType` with different targets are distinct cache keys.
+
+Cache append-only-within-a-turn property: once a `CachedWorld` is stored for a given `(snakeId, direction, foreignTuple)`, it is never overwritten or evicted within the turn. Active/dormant toggling (07-REQ-021) is done by querying the snake's interest map and commitment state at scoring time (§2.11) rather than mutating the cache. This keeps re-activation O(1) per cached world, satisfying 07-REQ-021's requirement that branch toggling not require re-simulation.
+
+Cache clearing (07-REQ-023) is keyed on a turn-number transition observed in the SpacetimeDB subscription. The coordinator holds a `lastObservedTurnNumber` field; on each subscription update, if the observed turn number differs, the coordinator wipes all `SnakeCacheEntry` instances and rebuilds from scratch. Reconnect-induced snapshots that resurface the same turn number do nothing.
+
+Portfolio weights are *not* stored in `CachedWorld` (07-REQ-026). Weights are read from the portfolio mirror (§2.4) at scoring time and applied as a final multiplication. This makes weight changes a pure rescore (no simulation), satisfying 07-REQ-022, 07-REQ-031, and 07-REQ-037.
+
+---
+
+### 2.7 Reactive Inputs and Interest Map Recomputation
+
+Satisfies 07-REQ-020, 07-REQ-022, 07-REQ-031, 07-REQ-042, 07-REQ-043.
+
+The coordinator computes three reactive-input artefacts per owned snake on every change:
+
+1. **Interest map**: `Map<SnakeId (foreign), Set<Direction>>` produced by unioning every active Drive's `foreignMoveNomination(self, target, board)` output. Recomputed on: portfolio mirror rebuild (§2.4) that adds/removes/retargets a Drive on this snake, or whenever a fresh pre-turn board arrives (turn transition).
+2. **Commitment map**: `Map<SnakeId (foreign), Direction | null>` built from the SpacetimeDB staged-moves subscription according to 07-REQ-034's per-category rules: opponent → null; automatic-mode teammate → null; manual-mode teammate → staged direction iff that direction intersects this snake's interest map for that teammate, else null. Recomputed on: any change to the staged-moves subscription, any change to a teammate's `manualMode` field, or any interest-map recomputation that could change the manual-teammate intersection result.
+3. **Weight vector**: a flat array of effective portfolio weights aligned with the portfolio mirror's preference and drive arrays. Recomputed on: portfolio mirror rebuild.
+
+After any of these three recomputes, the coordinator does the following per snake:
+
+- If interest map or commitment map changed: re-evaluate active/dormant status of cached worlds (a cached world is active iff every foreign snake in its `foreignTuple` is in the interest map and the foreign snake's commitment is null or matches the tuple's direction for it). Enqueue uncomputed-but-now-active lattice points for simulation in the snake's current compute tier (07-REQ-043). Rescore the stateMap from active worlds.
+- If only the weight vector changed: skip activation re-evaluation. Rescore the stateMap from already-active worlds (07-REQ-022, 07-REQ-042).
+- After rescoring: if the stateMap changed for any candidate direction, set the snake's dirty flag (07-REQ-036).
+
+A reverted commitment (a foreign snake's commitment changes from D back to a previously-committed D′) does not enqueue work because the cached worlds for D′ were never evicted — they re-activate immediately (07-REQ-031, 07-REQ-043 second sentence).
+
+---
+
+### 2.8 World Simulation via Shared Engine
+
+Satisfies 07-REQ-024, 07-REQ-025, 07-REQ-032.
+
+A simulation request consists of a pre-turn `GameState`, a `(self snakeId, self direction)` pair, and a `foreignTuple: Map<SnakeId, Direction>`. The simulation worker:
+
+1. Builds a `stagedMoves: Map<SnakeId, StagedMove>` from the inputs:
+   - `self snakeId → { direction: self direction, stagedBy: <bot agent>}`.
+   - For each `(foreignSnakeId, direction)` in `foreignTuple`: `foreignSnakeId → { direction, stagedBy: <bot agent>}`.
+   - For each alive foreign snake **not** in `foreignTuple` (frozen per 07-REQ-032): omit from the staged-moves map. The shared engine's `resolveTurn` ([01] §3.8) treats absence per [01-REQ-042], which uses `lastDirection` or random fallback. **The framework intercepts this**: rather than letting the engine pick a fallback direction for frozen snakes (which would cause the snake to actually move in simulation), the framework uses a `resolveTurnFrozenForeign` wrapper (a thin per-call composition over `resolveTurn`) that injects "stay in place" semantics for frozen snakes by short-circuiting their movement phase. This wrapper is part of the framework's simulation kit, not a modification to the shared engine, preserving [02]'s shared codebase invariants.
+2. Calls `resolveTurnFrozenForeign(state, stagedMoves, turnNumber + 1, simulationTurnSeed)` to produce the next-turn `GameState`. The `simulationTurnSeed` is derived deterministically from `(gameSeed, currentTurn, snakeId, direction, foreignTupleKey)` so the same simulation request always yields the same world (useful for debugging; not relied upon for correctness).
+3. Runs each Drive in the snake's portfolio against the simulated world: computes `reward`, `distance`, `motivation`, `satisfied`. Runs each Preference: computes its scalar value. Returns the per-heuristic outputs to the coordinator, which stores them in the corresponding `CachedWorld`.
+
+Annotations (07-REQ-039 — "any annotations the framework computes against those worlds") are computed on demand at snapshot time (§2.11), not stored per cached world, because they may depend on the *worst-case* world per-direction (which changes as the cache fills) rather than per-world. See 07-REVIEW-014.
+
+---
+
+### 2.9 Lattice Construction and Dijkstra Traversal
+
+Satisfies 07-REQ-027, 07-REQ-028, 07-REQ-029, 07-REQ-030, 07-REQ-031.
+
+For an owned snake's candidate self-direction, the lattice is constructed lazily as follows:
+
+- **Dimensions**: enumerated from the snake's interest map. For each foreign snake Y with non-empty interest-map directions, Y contributes one dimension. Dimensions are ordered by foreign snake ID for canonical traversal.
+- **Active directions per dimension**: for foreign snake Y with commitment `c_Y`, the active directions are `{c_Y}` if `c_Y ≠ null`, else the full interest-map set for Y.
+- **Per-direction priority weight** (07-REQ-028): for each `(Y, D)` in the interest map,
+  ```
+  priority(Y, D) = Σ over Drives ∇ that nominate D for Y of:
+                   driveWeight(∇) × RANK_DECAY ^ rank(∇)
+  ```
+  where `rank(∇)` is the Drive's position in the snake's pinned-then-lexicographic ordering ([06-REQ-007]) starting at 0 for the highest-ranked Drive. **`RANK_DECAY = 0.9`.** Rank-decay ensures higher-priority Drives dominate the lattice traversal order without entirely silencing lower-priority Drives' nominations. Recomputed on any Drive add/remove/weight-change/retarget for this snake (07-REQ-028 reactivity clause).
+- **Active directions per dimension are sorted by descending `priority(Y, D)`**, breaking ties by direction enum order (Up, Right, Down, Left).
+- **Combined point priority**: for a lattice point `(rank_Y0, rank_Y1, ..., rank_Yn)`,
+  ```
+  combined = Π over i of priority(Y_i, sortedActiveDirections(Y_i)[rank_Yi])
+  ```
+- **Traversal queue** (07-REQ-029, 07-REQ-030): a max-heap keyed on `combined`. Initialised with the all-zeros point (rank 0 in every dimension). On dequeue, the point's `(self direction, foreignTuple)` is dispatched to the simulation worker pool, and the point's axis-neighbours (each obtained by incrementing exactly one dimension's rank by 1, provided the new rank is within that dimension's active-direction count) are enqueued *if not already enqueued or completed*. A `visited` set on the queue prevents duplicate enqueues (07-REQ-030 "without re-visiting").
+- **Reactivity to priority changes** (07-REQ-031): a priority weight change recomputes `combined` for *enqueued* points (cheap heap rebuild) but does *not* invalidate already-completed cached worlds. The "still-uncomputed" portion of the lattice re-orders; the "completed" portion is left alone.
+
+The traversal is anytime: the coordinator may interrupt and resume by stashing the queue, and the snake's stateMap is meaningful (worst-case over completed active worlds) at any moment.
+
+---
+
+### 2.10 Foreign Snake Categorization
+
+Satisfies 07-REQ-033, 07-REQ-034.
+
+The coordinator categorises each alive foreign snake on every commitment-map recomputation (§2.7) using the SpacetimeDB subscription:
+
+- Snakes whose `centaurTeamId` matches the team owning the evaluating snake → **teammate**.
+- Snakes whose `centaurTeamId` differs → **opponent**.
+
+Then for teammates, the coordinator joins against its Convex subscription on `snake_operator_state` to read `manualMode`. A teammate is **manual-mode** iff `manualMode = true` in the latest snapshot. This join is local (both sources are subscribed reactively in the same coordinator thread) and consistent at the snapshot level — there is no cross-runtime transactionality, but a transient inconsistency only affects which lattice branches are active for one tick of the reactive recompute loop (next snapshot resolves it).
+
+---
+
+### 2.11 Scoring, Worst-Case Aggregation, and Display State Snapshot
+
+Satisfies 07-REQ-035, 07-REQ-036, 07-REQ-037, 07-REQ-038, 07-REQ-039, 07-REQ-063.
+
+For each owned snake on every reactive-input change (§2.7) and every cache append (a simulation worker returns a new `CachedWorld`):
+
+1. For each candidate self-direction, iterate over `worlds` filtered to the active subset:
+   ```
+   weightedScore(world) =
+     Σ over portfolio.preferences (p) of: p.weight × world.perPreferenceOutputs[p.heuristicId]
+   + Σ over portfolio.drives (d) of:
+       d.weight × (world.perDriveOutputs[d.key].satisfied
+                     ? world.perDriveOutputs[d.key].reward         // terminal reward (07-REQ-010)
+                     : world.perDriveOutputs[d.key].motivation)
+   ```
+2. The stateMap entry for that direction is `min` over active worlds' `weightedScore` (07-REQ-035 worst-case). The "worst-case world" for the direction is the specific world that achieved the minimum (ties broken by foreign-tuple lexicographic order — see 07-REVIEW-013).
+3. If the stateMap entry's value differs from the previous value (numerical comparison; threshold = exact equality), or if the worst-case world changed identity, the snake's dirty flag is set.
+
+On dirty-flag set, a **full snapshot** is written to `snake_bot_state` via [06]'s `updateSnakeBotState` mutation (07-REQ-039, 07-REQ-063):
+
+```typescript
+updateSnakeBotState({
+  gameId,
+  snakeId,
+  stateMap: { [direction]: number | undefined },
+  worstCaseWorlds: { [direction]: SimulatedWorldSnapshot | undefined },
+  annotations: { [direction]: WorldAnnotations },
+  heuristicOutputs: { [direction]: { [heuristicId]: number } },  // from worst-case world
+})
+```
+
+The snapshot write itself does not clear the dirty flag — only successful submission to SpacetimeDB does (§2.13), because the dirty flag's contract (07-REQ-044) is "this snake's softmax should be re-rolled and re-staged on the next submission pass". Display-state snapshot writes are best-effort frequent updates separate from staging discipline.
+
+`SimulatedWorldSnapshot` is the post-turn-resolution `GameState` (07-REQ-039 "the worst-case simulated world"). `WorldAnnotations` is the framework's computed-derived data (Voronoi territory map per 07-REQ-066, frozen-snake temporal annotations per 07-REQ-065 carried forward, etc.) — the concrete shape is design-deferred, see 07-REVIEW-014.
+
+---
+
+### 2.12 Compute Scheduling
+
+Satisfies 07-REQ-040, 07-REQ-041, 07-REQ-051, 07-REQ-052, 07-REQ-053, 07-REQ-054.
+
+The coordinator maintains three priority tiers of "wantsCompute" snakes (07-REQ-040):
+
+- **Tier 1 — Automatic-mode snakes**: any owned snake whose `snake_operator_state.manualMode = false`.
+- **Tier 2 — Selected manual-mode snakes**: `manualMode = true` and `operatorUserId ≠ null`.
+- **Tier 3 — Unselected manual-mode snakes**: `manualMode = true` and `operatorUserId = null`.
+
+A scheduling tick (driven by simulation worker availability) selects the next request to dispatch as follows:
+
+1. Choose the highest non-empty tier.
+2. Within that tier, round-robin across snakes (a per-tier cursor).
+3. For the chosen snake, round-robin across candidate directions (a per-snake cursor) — 07-REQ-041's "breadth-first on rank 0" property ensures every candidate direction gets its highest-priority foreign world before any gets its second.
+4. For the chosen `(snake, direction)`, dequeue the highest-`combined`-priority point from the lattice traversal queue (§2.9). If the queue is empty (lattice exhausted for that direction), advance the per-snake cursor.
+
+Selection promotion (07-REQ-051): on a Convex snapshot showing a manual-mode snake transitioning to `operatorUserId ≠ null`, the coordinator moves the snake from tier 3 to tier 2 effective on the next scheduling tick. On the same transition, the coordinator re-evaluates active/dormant status of the snake's cached branches against the current reactive inputs (§2.7) and rescores the stateMap (07-REQ-052). Selection promotion does not stage a move (07-REQ-053). Existing operator-staged moves on the snake remain staged (07-REQ-054 — the framework never touches operator-staged moves regardless).
+
+---
+
+### 2.13 Scheduled Submission Pipeline
+
+Satisfies 07-REQ-044, 07-REQ-045, 07-REQ-045a, 07-REQ-046, 07-REQ-047, 07-REQ-049.
+
+The coordinator runs a scheduled submission pass on **a 100ms interval** (`SCHEDULED_SUBMISSION_INTERVAL_MS = 100`) using `setInterval` in the coordinator thread. Each pass iterates over automatic-mode snakes (tier 1 of §2.12) whose dirty flag is set, and for each:
+
+1. Reads the snake's current stateMap.
+2. Filters candidate directions to those with defined stateMap entries (07-REQ-049 — undefined entries excluded from softmax).
+3. If at least one defined entry exists: samples a direction via softmax (§2.14) using the snake's effective temperature.
+4. If no defined entries exist: skips staging if turn 0 with no `lastDirection`, else stages `lastDirection` (07-REQ-049 fallback).
+5. Calls `stage_move(snakeId, direction)` on SpacetimeDB via the per-CentaurTeam game credential. The credential's bot participant identity is captured in the `staged_moves` log entry's `stagedBy` field automatically by [04]'s `stage_move` reducer ([04-REQ-026]) — the framework does not pass `stagedBy` explicitly. This satisfies 07-REQ-047.
+6. On successful staging acknowledgement from SpacetimeDB, clears the snake's dirty flag.
+
+**Final submission pass** (07-REQ-045): the coordinator additionally arms a per-turn `setTimeout` whose deadline is the dynamically computed:
+
+```
+deadlineMs = now + min(automaticTimeAllocationMs, remainingTimeBudgetMs) - IMMINENT_THRESHOLD_MS
+```
+
+where `automaticTimeAllocationMs` is read from `game_centaur_state` (or `turn0AutomaticTimeAllocationMs` on turn 0), and `remainingTimeBudgetMs` is read from the SpacetimeDB chess-clock subscription. **`IMMINENT_THRESHOLD_MS = 50`** — chosen as half of `SCHEDULED_SUBMISSION_INTERVAL_MS` to ensure the final pass fires after the most recent scheduled pass had a chance to update stateMaps but with enough lead time to complete a softmax sample, the `stage_move` round-trip, and SpacetimeDB ACID resolution before the chess clock expires (a 50ms margin is generous on a same-region SpacetimeDB connection; teams whose hosting topology requires more should reduce `automaticTimeAllocationMs`). See 07-REVIEW-012.
+
+The timer fires the final pass which behaves identically to a scheduled pass (steps 1–6 above) but iterates over **all** automatic-mode snakes with dirty flags, regardless of how recently they were staged. Both timers are re-armed on every fresh pre-turn board (turn transition).
+
+If `remainingTimeBudgetMs` decreases below the originally computed deadline (e.g., another team's actions consumed time the framework hadn't accounted for), the coordinator re-arms the `setTimeout` to the new earlier deadline on every chess-clock subscription update.
+
+**Manual-submission flush suppression** (07-REQ-045a): the coordinator subscribes to the SpacetimeDB `chess_clock` table for the team's `declaredTurnOver` field. When `declaredTurnOver` transitions from false to true, the coordinator cancels the pending `setTimeout` for the final pass without firing it. The scheduled 100ms pipeline is not cancelled; it continues until the actual turn resolution (which arrives shortly thereafter with a new turn number, triggering cache clear per §2.6).
+
+**Manual-mode snakes are excluded from all submission passes** (07-REQ-046). Steps 1–6 iterate only over tier 1.
+
+---
+
+### 2.14 Softmax Decision and Temperature
+
+Satisfies 07-REQ-048, 07-REQ-049, 07-REQ-050, 07-REQ-055, 07-REQ-056.
+
+The softmax sample is implemented as:
+
+```typescript
+function softmaxSample(stateMap, temperature, rng): Direction {
+  const defined = entries(stateMap).filter(([_, score]) => score !== undefined)
+  const T = Math.max(temperature, 1e-9)  // avoid div-by-zero
+  const expScores = defined.map(([d, s]) => [d, Math.exp(s / T)])
+  const total = sum(expScores.map(([_, e]) => e))
+  let r = rng() * total
+  for (const [d, e] of expScores) {
+    r -= e
+    if (r <= 0) return d
+  }
+  return defined[defined.length - 1][0]  // numerical-error fallback
+}
+```
+
+`rng` is the Snek Centaur Server process's default randomness source (Node's `Math.random` is acceptable; cryptographic randomness is unnecessary). Lower `T` concentrates probability on the highest-scoring direction (07-REQ-050).
+
+`temperature` is read via `portfolioMirror.effectiveTemperature` (§2.4), which is the Convex-snapshot-current value of `snake_operator_state.temperatureOverride ?? game_centaur_state.globalTemperature`. Because the mirror is rebuilt on every snapshot, temperature changes take effect on the next softmax decision without cache invalidation (07-REQ-056). Temperature changes do not set the dirty flag — they affect the next sample but not the underlying stateMap (07-REQ-022 covers weights, not temperature, but the same cheap-rescan principle applies trivially to temperature).
+
+---
+
+### 2.15 Temporal Annotation of Simulated Boards
+
+Satisfies 07-REQ-032, 07-REQ-065, 07-REQ-066.
+
+Each `CachedWorld.simulatedState` carries a per-snake turn timestamp annotation alongside the standard `GameState` fields:
+
+```typescript
+interface SimulatedGameStateAnnotation {
+  readonly perSnakeTurnTimestamp: ReadonlyMap<SnakeId, TurnNumber>
+}
+```
+
+Lattice snakes (the self snake and every foreign snake in the simulation's `foreignTuple`) are annotated with `currentTurn + 1` (the simulated turn). Frozen snakes (alive foreigns absent from the lattice) are annotated with `currentTurn` (one turn behind the simulated snakes — 07-REQ-065).
+
+This annotation is read by board-analysis utilities the framework provides to Drive/Preference authors (§3.6), notably the multi-headed BFS for Voronoi territory maps. The BFS gives each snake-head a starting BFS distance equal to `(simulatedTurn − perSnakeTurnTimestamp[snakeId]) × 1`, so frozen snakes effectively start one BFS step ahead — compensating for the fact that they "should" have moved this turn but the simulation kept them frozen (07-REQ-066). This makes Voronoi territory inferences against simulated worlds approximately correct despite the frozen-in-place fiction.
+
+---
+
+### 2.16 Subscription Boundaries and Negative Surface
+
+Satisfies 07-REQ-005, 07-REQ-018, 07-REQ-057, 07-REQ-058, 07-REQ-059, 07-REQ-060, 07-REQ-061, 07-REQ-062, 07-REQ-064.
+
+The coordinator opens exactly two reactive sources for its `(centaurTeamId, gameId)`:
+
+1. Convex reactive subscription via `getGameCentaurState({ gameId, centaurTeamId })` and `getEffectiveHeuristicConfig({ gameId, snakeId })` per owned snake. Authentication via the per-CentaurTeam game credential.
+2. SpacetimeDB subscription scoped by [04]'s RLS to this team's view of the game. Authentication via the bot participant access token derived from the game credential per [03] §3.18.
+
+The coordinator opens **no other** Convex queries or mutations on operator-owned tables; it does not write to `snake_drives`, `snake_heuristic_overrides`, `snake_operator_state`, `heuristic_config`, `global_centaur_params`, or `centaur_action_log` (07-REQ-018, 07-REQ-059, 07-REQ-064). Its only Convex write is `updateSnakeBotState` for owned snakes (07-REQ-004). Its only SpacetimeDB write is `stage_move` for automatic-mode owned snakes (07-REQ-005, 07-REQ-046). Move-staging entries are recorded by the SpacetimeDB log inherently (07-REQ-062); the framework writes nothing to the Centaur action log.
+
+The coordinator never opens subscriptions to other CentaurTeams' Convex documents or SpacetimeDB instances (07-REQ-061). Cross-team isolation is enforced by Convex's authorisation checks ([06] §2.6) and SpacetimeDB's RLS ([04] §2.9), but the framework's design also avoids constructing such subscriptions in the first place.
+
+Coach reads of `snake_bot_state` and the Centaur action log are served entirely through Module 06's read-side auth surface (e.g., `getGameCentaurState`, action-log queries) under the Coach's own Convex auth identity ([06] §2.6); the bot framework exposes no coach-aware code path, holds no coach identity, and performs no read or write on the Coach's behalf.
+
+---
+
+### 2.17 Bot Framework Lifecycle
+
+Satisfies 07-REQ-001, 07-REQ-002, 07-REQ-003.
+
+The Snek Centaur Server invokes the framework via three lifecycle entry points (§3.3):
+
+- `startGameSession({ centaurTeamId, gameId, gameCredential, stdbConnection, convexClient })`: spawns the coordinator worker for the team's game, opens subscriptions, returns a session handle.
+- `endGameSession(handle)`: terminates the coordinator, releases simulation worker capacity, closes subscriptions. Called when the game's record transitions to a terminal status or the framework receives a SpacetimeDB game-end event.
+- `getRegisteredHeuristics()`: returns the build-time registry (§2.3) for use by [08]'s UI. Pure synchronous getter; does not depend on any session.
+
+Multiple game sessions may be active concurrently for different teams hosted by the same Snek Centaur Server. Sessions are independent — terminating one does not affect others.
+
+---
+
+### 2.18 Lazy-Insert Contract for Missing `heuristic_config` Rows
+
+Satisfies 07-REQ-016, 07-REQ-018; resolves [08]'s 08-REVIEW-021 (rewritten resolution; see updated REVIEW item).
+
+When the Captain visits the global centaur params page in the SvelteKit frontend ([08]), the page initiates a "registry sync" that calls a new `insertMissingHeuristicConfig` mutation on Module 06 (§2.19) under the **visitor's** Convex auth credential (the Captain's Google OAuth identity, per [06] §2.6 — the Captain has heuristic config write authority). The mutation:
+
+- Reads the page-supplied list of `HeuristicRegistration` entries (sent as a request payload — the registry's own elements minus the implementation function references, which are not serialisable).
+- For each entry whose `heuristicId` does not exist in the team's `heuristic_config`, **inserts** a new row using the registry's `defaultWeight`, `activeByDefault`, and `nickname` as initial values.
+- For entries whose `heuristicId` already exists, does **nothing** (insert-only contract — never overwrites Captain-edited values).
+
+The framework itself never invokes this mutation. The framework is read-only with respect to `heuristic_config` (07-REQ-018). The mutation is invoked from [08] under the Captain's credential because the Captain is the trust anchor for changes to team configuration (per [06] §2.6 and 08-REVIEW-001's Captain-only authorisation), and the lazy-insert is conceptually "the Captain accepting the registry's defaults for newly registered heuristics". The Captain may then edit defaults via `upsertHeuristicConfig` or delete unwanted entries via `deleteHeuristicConfig`.
+
+Stale entries (heuristic IDs in `heuristic_config` whose IDs are not in the current registry) are surfaced on the global centaur params page with a visual "stale" marker and a delete affordance, per the updated 08-REVIEW-021 resolution.
+
+---
+
+### 2.19 Module 06 Amendment: `insertMissingHeuristicConfig`
+
+Module 06's exported function contract surface ([06] §2.2.1, §3.2) is amended to add:
+
+```typescript
+mutation insertMissingHeuristicConfig(args: {
+  centaurTeamId: Id<"centaur_teams">,
+  registrations: ReadonlyArray<{
+    heuristicId: string,
+    heuristicType: "drive" | "preference",
+    defaultWeight: number,
+    activeByDefault: boolean | null,
+    nickname: string | null,
+  }>,
+}): { inserted: ReadonlyArray<string> }   // heuristic IDs newly inserted
+```
+
+Authorization: Captain of the specified CentaurTeam (consistent with `upsertHeuristicConfig`'s authorisation per 08-REVIEW-001).
+
+Semantics: insert-only. For each registration whose `heuristicId` is not already present in `heuristic_config` for the team, inserts a row with the registration's values. For IDs already present, no-op (does **not** patch existing rows). Returns the list of newly inserted IDs for UI confirmation. This is the only mutation in [06] with insert-only-never-overwrite semantics; it exists to discharge 07's lazy-insert contract (§2.18) without giving the framework or the page any path to silently overwrite Captain-authored values.
+
+This amendment is propagated to [06]'s spec file as part of this Phase 2 work.
+
+---
+
+## Exported Interfaces
+
+### 3.1 Heuristic Registry Types
+
+Motivated by 07-REQ-006, 07-REQ-007, 07-REQ-008, 07-REQ-014; consumed by Snek Centaur Server build (§2.3) and by [08]'s UI.
+
+```typescript
+export type HeuristicType = "drive" | "preference"
+
+export type DriveTargetType = "snake" | "cell"
+
+export interface HeuristicRegistration {
+  readonly heuristicId: string                       // stable ID, matches heuristic_config.heuristicId
+  readonly heuristicType: HeuristicType
+  readonly nickname: string                          // human-readable; UI default
+  readonly defaultWeight: number                     // seed for insertMissingHeuristicConfig
+  readonly activeByDefault: boolean | null           // non-null for preferences, null for drives
+  readonly targetType: DriveTargetType | null        // non-null for drives, null for preferences;
+                                                     // matches Target.kind for the Drive variant produced
+  readonly implementation: () => Drive<SnakeTarget> | Drive<CellTarget> | Preference
+}
+
+export type HeuristicRegistry = ReadonlyArray<HeuristicRegistration>
+
+// ──────────────────────────────────────────────────────────────────────────
+// Author-facing registration API
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Heuristic authors register Drives and Preferences via two minimal helpers.
+// Each call returns a `HeuristicRegistration` literal whose `heuristicId`,
+// `heuristicType`, `defaultWeight`, and `implementation` fields are pinned
+// from the call arguments; `nickname`, `activeByDefault`, and `targetType`
+// are filled from the optional `meta` argument (with sensible defaults from
+// the implementation factory's emitted instance — `targetType` for drives
+// is read from the constructed Drive's declared target kind; `nickname`
+// defaults to a humanised `heuristicId`; `activeByDefault` defaults to true
+// for preferences and is null for drives).
+//
+// `HEURISTIC_REGISTRY` (§2.3) is the build-time-shared array literal whose
+// entries are the values returned by these helpers. Authors never construct
+// `HeuristicRegistration` records by hand — `registerDrive` /
+// `registerPreference` are the sole supported registration entry points.
+
+export interface DriveRegistrationMeta {
+  readonly nickname?: string                         // defaults to humanised heuristicId
+  readonly targetType?: DriveTargetType              // defaults to impl().target kind
+}
+
+export interface PreferenceRegistrationMeta {
+  readonly nickname?: string                         // defaults to humanised heuristicId
+  readonly activeByDefault?: boolean                 // defaults to true
+}
+
+export function registerDrive<T extends DriveTarget>(
+  heuristicId: string,
+  impl: () => Drive<T>,
+  defaultWeight: number,
+  meta?: DriveRegistrationMeta,
+): HeuristicRegistration
+
+export function registerPreference(
+  heuristicId: string,
+  impl: () => Preference,
+  defaultWeight: number,
+  meta?: PreferenceRegistrationMeta,
+): HeuristicRegistration
+
+// ──────────────────────────────────────────────────────────────────────────
+// Read-only registered-set accessor
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Returns a frozen, deduplicated view of the currently-registered heuristic
+// IDs paired with their type and default weight. This is the minimum shape
+// downstream consumers ([08]'s frontend, [06]'s lazy-insert payload) need to
+// reconcile the registry against `heuristic_config`. Returning the full
+// `HeuristicRegistration` is intentionally avoided here so consumers cannot
+// accidentally invoke `implementation()` outside the framework process.
+
+export interface RegisteredHeuristicSummary {
+  readonly heuristicId: string
+  readonly heuristicType: HeuristicType
+  readonly defaultWeight: number
+  readonly nickname: string
+  readonly activeByDefault: boolean | null
+  readonly targetType: DriveTargetType | null
+}
+
+export function getRegisteredHeuristics(
+  registry: HeuristicRegistry,
+): ReadonlyArray<RegisteredHeuristicSummary>
+```
+
+### 3.2 Drive and Preference Interfaces
+
+Motivated by 07-REQ-006, 07-REQ-007, 07-REQ-008, 07-REQ-009, 07-REQ-010, 07-REQ-012.
+
+```typescript
+import type { SnakeState, GameState, Direction, Cell, SnakeId } from "@team-snek/game-rules"
+
+export type Snake = SnakeState              // re-export for Drive author convenience
+
+// Discriminated union over Drive target shape. The `kind` discriminator lets
+// framework code, the operator UI, and Drive authors narrow on a single
+// runtime tag rather than relying on structural inspection of `value`.
+// Per 07-REQ-006 (Drive<T> target type is constrained to one of two target
+// types: a snake or a cell).
+export interface SnakeTarget {
+  readonly kind: "snake"
+  readonly value: Snake          // resolved against the current pre-turn board
+}
+
+export interface CellTarget {
+  readonly kind: "cell"
+  readonly value: Cell
+}
+
+export type Target = SnakeTarget | CellTarget
+
+// `DriveTarget` is the type-parameter constraint for Drive<T> — author code
+// instantiates Drive<SnakeTarget> or Drive<CellTarget>. The framework
+// resolves the persisted `(targetType, targetId)` pair from `snake_drives`
+// ([06] §2.1.4) into the appropriate Target variant before invoking the
+// Drive's pure scoring functions.
+export type DriveTarget = SnakeTarget | CellTarget
+
+export interface Drive<T extends DriveTarget> {
+  readonly heuristicId: string                                   // matches HeuristicRegistration
+
+  reward(self: Snake, target: T, board: GameState): number       // [-1, 1]
+  distance(self: Snake, target: T, board: GameState): number     // ≥ 0
+  motivation(reward: number, distance: number): number           // pure combiner; [-1, 1]
+  satisfaction(self: Snake, target: T, board: GameState): boolean
+
+  targetEligibility(candidate: T, self: Snake, board: GameState): boolean
+  selfDirectionNomination(self: Snake, target: T, board: GameState): ReadonlySet<Direction>
+  foreignMoveNomination(
+    self: Snake,
+    target: T,
+    board: GameState,
+  ): ReadonlyMap<SnakeId, ReadonlySet<Direction>>
+}
+
+export interface Preference {
+  readonly heuristicId: string
+  evaluate(self: Snake, board: GameState): number                // [-1, 1]
+}
+```
+
+The `motivation(reward, distance) => number` shape is a pure combiner over two scalars — the framework computes `reward` and `distance` via `Drive<T>`'s methods first against each simulated world, then calls `motivation(reward, distance)`. This shape decouples authoring of the value-of-the-target (`reward`), the spatial proximity of the target (`distance`), and the combined motivation (`motivation`), and makes the satisfaction terminal-reward path (07-REQ-010, which bypasses `motivation` and uses `reward`) coherent.
+
+### 3.3 Bot Framework Lifecycle
+
+Motivated by 07-REQ-001, 07-REQ-003, 07-REQ-004, 07-REQ-040.
+
+```typescript
+import type { ConvexClient } from "convex/browser"
+import type { DBConnection } from "@spacetimedb/sdk"
+
+export interface StartGameSessionArgs {
+  readonly centaurTeamId: string
+  readonly gameId: string
+  readonly gameCredential: string         // per-CentaurTeam game credential JWT [05-REQ-032b]
+  readonly stdbConnection: DBConnection   // pre-authenticated via [03]'s OIDC flow
+  readonly convexClient: ConvexClient     // authenticated with the game credential
+  readonly registry: HeuristicRegistry
+}
+
+export interface BotFrameworkSession {
+  readonly centaurTeamId: string
+  readonly gameId: string
+  end(): Promise<void>
+}
+
+export function startGameSession(args: StartGameSessionArgs): Promise<BotFrameworkSession>
+
+export function endGameSession(session: BotFrameworkSession): Promise<void>
+
+export function getRegisteredHeuristics(registry: HeuristicRegistry):
+  ReadonlyArray<Pick<HeuristicRegistration,
+    "heuristicId" | "heuristicType" | "nickname" | "defaultWeight" | "activeByDefault" | "targetType">>
+```
+
+The `getRegisteredHeuristics` helper returns a serialisable projection of the registry (omitting the `implementation` function reference) for use by [08]'s lazy-insert mutation payload (§2.18) and by [08]'s UI when it needs to enumerate registered IDs at render time without importing the implementations.
+
+### 3.4 Per-Snake Display State Snapshot Shape
+
+Motivated by 07-REQ-039, 07-REQ-063; consumed by [06]'s `snake_bot_state.stateMap`/`worstCaseWorlds`/`annotations`/`heuristicOutputs` `v.any()` columns and by [08]'s decision-table UI.
+
+```typescript
+export interface StateMap {
+  readonly Up?: number
+  readonly Right?: number
+  readonly Down?: number
+  readonly Left?: number
+}
+
+export interface WorstCaseWorldRecord {
+  readonly Up?: SimulatedWorldSnapshot
+  readonly Right?: SimulatedWorldSnapshot
+  readonly Down?: SimulatedWorldSnapshot
+  readonly Left?: SimulatedWorldSnapshot
+}
+
+export interface SimulatedWorldSnapshot {
+  readonly simulatedTurn: number
+  readonly perSnakeTurnTimestamp: Record<string /* SnakeId */, number /* TurnNumber */>
+  readonly state: GameState                              // [01]'s GameState
+  readonly foreignTuple: Record<string /* SnakeId */, Direction>
+}
+
+export interface WorldAnnotations {
+  readonly voronoi?: Record<string /* SnakeId */, number>     // BFS-distance count of cells owned
+  readonly otherFrameworkComputed?: Record<string, unknown>   // see 07-REVIEW-014
+}
+
+export interface PerHeuristicOutputs {
+  readonly [heuristicId: string]: number
+}
+
+// Records a single class of contract violation by an author-supplied scoring
+// function during the current turn (07-REQ-009a, 07-REQ-009b). Deduplicated
+// per-turn per (snakeId, heuristicId, violationKind) — at most one entry per
+// triple per turn — so a runaway heuristic does not flood [08]'s UI.
+export type HeuristicViolationKind = "out_of_range" | "non_finite" | "wrong_type"
+
+export interface HeuristicViolation {
+  readonly heuristicId: string
+  readonly violationKind: HeuristicViolationKind
+  readonly functionName: "reward" | "distance" | "motivation" | "satisfaction" | "evaluate"
+  readonly rawValueRendered: string                       // e.g., "NaN", "Infinity", "1.7", "\"abc\"", "[object Object]"
+  readonly substitutedValue: number | boolean             // what the framework actually used downstream
+  readonly firstSeenAtMs: number                          // monotonic ms within the current turn
+}
+
+export interface SnakeBotStateSnapshot {
+  readonly stateMap: StateMap
+  readonly worstCaseWorlds: WorstCaseWorldRecord
+  readonly annotations: Record<Direction, WorldAnnotations>
+  readonly heuristicOutputs: Record<Direction, PerHeuristicOutputs>
+  // Deduplicated per-turn list of contract violations the framework guard
+  // had to substitute for; cleared on turn change. See 07-REQ-009a/009b.
+  readonly heuristicViolations: ReadonlyArray<HeuristicViolation>
+}
+```
+
+### 3.5 Constants
+
+Motivated by resolved 07-REVIEW-004 (concrete values pinned in Phase 2 Design per design discretion).
+
+```typescript
+export const RANK_DECAY: number = 0.9                          // §2.9
+export const SCHEDULED_SUBMISSION_INTERVAL_MS: number = 100    // §2.13
+export const IMMINENT_THRESHOLD_MS: number = 50                // §2.13; see 07-REVIEW-012
+```
+
+These constants are part of the framework's exported surface (rather than internal) because [08]'s operator UI surfaces them in operator help text and in the bot-parameter calibration page. They are not operator-tunable; teams that need different values modify the framework source and rebuild.
+
+### 3.6 Board-Analysis Utilities for Heuristic Authors
+
+Motivated by 07-REQ-066.
+
+```typescript
+export function multiHeadedBfsVoronoi(
+  state: GameState,
+  perSnakeTurnTimestamp: ReadonlyMap<SnakeId, number>,
+  simulatedTurn: number,
+): ReadonlyMap<SnakeId, ReadonlySet<Cell>>
+```
+
+Implements the temporal-head-start mechanism of 07-REQ-066. Provided as a framework utility so that Drive authors writing territory-based heuristics share a canonical, correct implementation rather than each rolling their own and risking the frozen-snake fiction leaking into their territory inferences.
+
+### 3.7 DOWNSTREAM IMPACT Notes
+
+- **[08] heuristic registry consumption**: [08]'s SvelteKit frontend imports `HeuristicRegistry` from the same Centaur Server package that boots the framework, satisfying 08-REVIEW-021's drift-elimination requirement. The Drive dropdown (08-REQ-052) sources its options from the intersection `heuristic_config ∩ HEURISTIC_REGISTRY` filtered to `heuristicType = "drive"`. The decision-table column set (08's heuristic columns) sources from the same intersection.
+- **[08] global centaur params page lazy-insert call**: on Captain visits to the global centaur params page, the page calls `insertMissingHeuristicConfig({ centaurTeamId, registrations: getRegisteredHeuristics(registry) })`. The mutation runs under the Captain's Convex auth credential. [08]'s implementation must wire this call into the page's load lifecycle and surface the returned `inserted` list to the Captain so the new registrations are visible immediately.
+- **[06] amendment**: `insertMissingHeuristicConfig` mutation is added to [06]'s function contract surface and exported interfaces, with insert-only semantics (§2.19). Captain authorisation.
+- **[06] `snake_bot_state` column shape narrowing**: while [06]'s schema declares `stateMap`, `worstCaseWorlds`, `annotations`, and `heuristicOutputs` as `v.any()` ([06] §2.1.3), this module's §3.4 fixes their concrete TypeScript shape. [06]'s eventual narrowing of these `v.any()` columns to a `v.object(...)` schema (noted as future-permissible in [06] §2.1.3) shall use these shapes.
+- **[08] operator UI surfacing of submission constants**: [08]'s operator help text and bot-parameter calibration page surface `SCHEDULED_SUBMISSION_INTERVAL_MS`, `IMMINENT_THRESHOLD_MS`, and `RANK_DECAY` as advisory information — they are framework constants, not operator-tunable parameters.
+- **[08] worst-case world rendering**: [08]'s "worst-case world preview" UI ([08]'s operator interface) consumes `WorstCaseWorldRecord` from `snake_bot_state.worstCaseWorlds`. Each entry is a `SimulatedWorldSnapshot` carrying the post-turn `GameState` plus the per-snake turn timestamp annotation — [08] should respect the temporal annotation when rendering frozen snakes (e.g., visually marking them as "held in place / temporally one turn behind") to communicate the simulation fiction to operators.
+- **[08] decision-table no-recompute rule**: [08]'s in-game decision-table view ([08]'s heuristic-output table per direction × heuristic) is rendered **purely** from the framework's published `snake_bot_state.heuristicOutputs` snapshot. [08] **must not** re-evaluate any Drive's `reward`/`distance`/`motivation` or any Preference's `score` in the frontend, must not re-run any simulation, and must not interpolate or extrapolate values for cells/heuristics absent from `heuristicOutputs`. Missing entries render as "—" (or equivalent absent indicator), never as zeros or stale prior-turn values. The framework is the sole source of truth for every cell in the decision table.
+- **[08] Captain `declareTurnOver` flush-suppression coordination**: [08]'s Captain UI ([08]'s "declare turn over" affordance) calls SpacetimeDB's `declare_turn_over` reducer ([04] §2.5) and **nothing else** with respect to the framework. The framework observes the resulting state transition through its existing SpacetimeDB subscription (§2.13 / §2.16) — turn-over manifests either as the `turnEndTime` collapsing and the resolver advancing the turn number, or as the equivalent observable signal exposed by [04]'s `declare_turn_over` reducer — and applies 07-REQ-045a's flush suppression on its own (cancels any in-flight scheduled-submission pass, cancels any imminent-deadline final pass, and emits no further `stage_move` writes for the team's snakes for the remainder of the turn). [08] **must not** open any out-of-band notification channel to the framework (no direct HTTP, no shared in-process call, no Convex side-channel) for `declareTurnOver`; the SpacetimeDB observation is the sole coordination mechanism. This keeps the framework's reactive-input boundary identical to every other run-time signal it consumes and matches §2.13's suppression mechanism exactly.
+- **[08] selection observation via Module 06 only**: [08]'s in-game UI persists the operator's currently-selected `(snakeId, direction)` to Module 06 ([06] §2.1.2 `snake_selected_direction` or equivalent — [06] §2.2's mutation surface). The framework observes that selection **only** through its existing Convex subscription on `GameCentaurStateView` (§2.16 — same subscription set already used for portfolio mirror reactivity); [08] **must not** push selection changes to the framework over any other channel (no direct HTTP, no shared in-process call, no SpacetimeDB write). This preserves the framework's single source-of-truth for reactive inputs and ensures selection promotions through the three-tier scheduler (§2.12) are driven by the same Convex transaction boundary as everything else the framework reads.
+- **[08] full-replacement snapshot rendering (no diff merge)**: each `updateSnakeBotState` write from the framework ([06] §2.2's framework-write mutation) replaces the **full** `stateMap`, `worstCaseWorlds`, `annotations`, `heuristicOutputs`, and `heuristicViolations` fields for the affected `snake_bot_state` row (§3.4 — the framework writes whole-snapshot values). [08]'s consuming components **must** treat each Convex subscription update as a complete replacement of the rendered state for that snake; [08] **must not** merge incoming snapshots into prior snapshots or attempt to diff-patch missing keys from earlier values. Stale entries from prior compute passes are intentionally absent from a new snapshot — preserving them would surface wrong cells in the decision table and wrong markers on the world preview.
+- **[08] heuristic-violation surfacing**: [08]'s in-game UI **must** surface `SnakeBotStateSnapshot.heuristicViolations` (07-REQ-009a/009b, §3.4) prominently to the operator viewing the affected snake — at minimum a visible badge on the decision-table column for the offending heuristic, a per-snake violation summary in the operator panel, and an expandable view showing each violation's `heuristicId`, `functionName`, `violationKind`, `rawValueRendered`, and `substitutedValue`. Violations are the framework's only operator-visible signal that an author's scoring function produced a non-finite or out-of-range value and was clamped/substituted; without prominent surfacing, vibe-coded heuristics will silently behave as if their range bug did not exist. The list is per-turn and resets on turn change; [08] **must not** persist or aggregate violations across turns within the in-game UI (a separate post-game review tool, if any, is out of scope for this module).
 
 ---
 
@@ -423,3 +1179,84 @@ If it's direct-to-SpacetimeDB, the framework reads it from its SpacetimeDB subsc
 **Decision**: Confirmed. v2.2 is canonical, consistent with 02-REVIEW-001 and 06-REVIEW-007.
 **Rationale**: See 02-REVIEW-001 resolution.
 **Affected requirements/design elements**: None.
+
+---
+
+### 07-REVIEW-011: Worker message protocol — concrete schema
+
+**Type**: Proposed Addition
+**Phase**: Design
+**Context**: §2.1 establishes the coordinator-and-simulation-pool architecture and §2.8 describes the `SimulateRequest`/`SimulateResponse` message exchange between them, but the concrete TypeScript message-type definitions, the serialisation strategy (structured-clone vs JSON vs SharedArrayBuffer), and the back-pressure mechanism when the coordinator outpaces the pool are not pinned by this Phase 2 design. These are implementation choices that do not affect the framework's external contract (Drive/Preference authors and downstream consumers see no difference) but they do affect the framework's internal stability and operability.
+**Question**: What concrete message protocol and back-pressure strategy should the coordinator–simulation-worker pool use?
+**Options**:
+- A: Structured-clone via `Worker.postMessage` for both directions; coordinator-side bounded queue per snake; drop oldest on overflow.
+- B: SharedArrayBuffer ring-buffer for `GameState` payloads; structured-clone for control messages.
+- C: JSON over `MessagePort`; simplest, slowest.
+
+**Informal spec reference**: N/A (implementation detail).
+**Resolution direction**: Defer to implementation; pick A as the default starting point because structured-clone handles `GameState` (a deeply nested ReadonlyArray-and-Map structure) without an explicit codec, and a per-snake bounded queue with drop-oldest semantics matches the anytime principle (newer simulations are more relevant than older ones because reactive inputs may have changed in between).
+
+---
+
+### 07-REVIEW-012: `IMMINENT_THRESHOLD_MS = 50` — empirical validation
+
+**Type**: Proposed Addition
+**Phase**: Design
+**Context**: §2.13 pins `IMMINENT_THRESHOLD_MS = 50` (half of `SCHEDULED_SUBMISSION_INTERVAL_MS`). The choice is justified analytically (the final pass needs lead time for softmax sample + `stage_move` round-trip + SpacetimeDB ACID resolution), but the actual round-trip latency from a Snek Centaur Server to its team's SpacetimeDB instance has not been measured and may vary by hosting topology (same-region vs cross-region). 50ms is generous for same-region and may be tight for cross-region.
+**Question**: Should `IMMINENT_THRESHOLD_MS` remain a fixed framework constant at 50ms, or should it be a per-team configurable bot parameter, or should it be empirically tuned post-MVP?
+**Options**:
+- A: Keep at 50ms; teams whose hosting topology requires more reduce `automaticTimeAllocationMs` instead (effectively shifting the same lead-time budget into a smaller per-turn compute window). (Current draft.)
+- B: Promote to a bot parameter on `global_centaur_params`, similar to `defaultAutomaticTimeAllocationMs`.
+- C: Defer to a post-MVP empirical-tuning pass.
+
+**Informal spec reference**: §6.8 (does not specify).
+**Resolution direction**: Option A for MVP — chosen because it minimises configurability surface while still allowing teams a coarse-grained workaround. Promotion to a bot parameter (Option B) is a clean follow-up if real-world deployments show 50ms is the wrong default for common hosting topologies.
+
+---
+
+### 07-REVIEW-013: Worst-case world tie-breaking
+
+**Type**: Gap
+**Phase**: Design
+**Context**: §2.11 specifies that the "worst-case world" for a candidate self-direction is the cached world that achieved the minimum weighted score, and that ties are broken by foreign-tuple lexicographic order. The choice of tie-breaker affects which world is shown in the operator's "worst-case world preview" UI ([08]'s operator interface), which in turn affects the operator's ability to reason about the bot's pessimism. Lexicographic order on the foreign tuple is deterministic but arbitrary — it does not, e.g., prefer the world with the most foreign-snake activity or the world most-recently simulated. An alternative tie-breaker (e.g., "most foreign snakes participating non-trivially in the tie") might be more informative for operators.
+**Question**: Should worst-case world tie-breaking be on lexicographic foreign-tuple order, on simulation-arrival order, on most-foreign-snake-activity, or on operator-configurable criteria?
+**Options**:
+- A: Foreign-tuple lexicographic order (current draft). Deterministic, simple, ignores semantic informativeness.
+- B: Most-recently-simulated world. Surfaces the freshest pessimistic world.
+- C: Most-foreign-snake-activity. Most informative for operators investigating Drive interactions.
+- D: Operator-configurable.
+
+**Informal spec reference**: §6.7 (silent on tie-breaking).
+**Resolution direction**: Defer; A is the safe default for MVP.
+
+---
+
+### 07-REVIEW-014: `WorldAnnotations` shape — extensibility vs commitment
+
+**Type**: Gap
+**Phase**: Design
+**Context**: §3.4's `WorldAnnotations` interface declares an optional `voronoi` field and an open `otherFrameworkComputed: Record<string, unknown>` escape hatch. The current draft chooses an open shape because the set of useful per-world annotations (Voronoi, food proximity, threat proximity, eligibility-to-collect-potion, etc.) is likely to grow during operator UX iteration in [08], and pinning a closed shape now would force [06]'s `snake_bot_state.annotations` column to a tight schema that requires migration on every new annotation kind. The open escape hatch defers that commitment but sacrifices type-safety end-to-end and complicates [08]'s rendering logic (which must defensively check for keys' existence).
+**Question**: Should `WorldAnnotations` be pinned to a closed discriminated union now, kept open as in the current draft, or pinned per-annotation-kind via per-key feature flags?
+**Options**:
+- A: Keep open (current draft). Defers schema commitment.
+- B: Closed discriminated union pinned now. Forces enumeration of all useful annotations upfront.
+- C: Per-annotation feature-flag fields with explicit absence vs presence semantics.
+
+**Informal spec reference**: §6.7 (does not enumerate annotations).
+**Resolution direction**: Keep A for MVP; revisit during [08] Phase 2 once the operator UI's annotation needs are concrete.
+
+---
+
+### 07-REVIEW-015: Workspace-package boundary for the shared `HEURISTIC_REGISTRY` module
+
+**Type**: Proposed Addition
+**Phase**: Design
+**Context**: 08-REVIEW-021's user-directed resolution pins the registry-sharing **mechanism** as build-time-shared (a TypeScript module imported by both the framework runtime and the SvelteKit frontend); §2.3, §2.18, §3.7's [08] notes, and [08]'s 08-REVIEW-021 resolution all assume that mechanism and are not revisited here. What 08-REVIEW-021 does not pin is the **packaging boundary** of that shared module within the monorepo — specifically whether `HEURISTIC_REGISTRY` and the heuristic implementations live in (a) a dedicated workspace package (e.g., `@team-snek/heuristics`) imported by both the Snek Centaur Server ([02-REQ-004]) and [08]'s SvelteKit app, (b) a sub-path export of the existing Snek Centaur Server package, or (c) a SvelteKit-app-internal module re-exported into the framework via a relative path. All three options realise the build-time-shared mechanism and discharge 08-REVIEW-021 identically; they differ only in repository layout and dependency direction. The choice affects [02]'s package graph and [09]'s monorepo-layout requirements.
+**Question**: Which packaging boundary should host the shared `HEURISTIC_REGISTRY` module?
+**Options**:
+- A: Dedicated workspace package `@team-snek/heuristics` depended on by both the Snek Centaur Server package and the [08] SvelteKit app. Cleanest dependency direction; one rebuild target.
+- B: Sub-path export of the Snek Centaur Server package (`@team-snek/centaur-server/heuristics`) consumed by [08]. Avoids a new package, but couples [08]'s frontend dependency graph to the server package.
+- C: Module owned by [08]'s SvelteKit app and re-exported into the framework. Inverts the natural dependency direction and is recorded for completeness only.
+
+**Informal spec reference**: §6.4 (does not specify mechanism); 08-REVIEW-021 resolution (pins build-time-shared but not packaging boundary).
+**Status**: Open. Does **not** reopen 08-REVIEW-021's mechanism choice. To be resolved during [09] platform-UI Phase 2 when the monorepo layout is finalised. None of the three options change Phase 2's design contracts in [07] or [08].
