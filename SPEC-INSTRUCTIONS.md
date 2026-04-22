@@ -7,8 +7,8 @@ This document governs how the Team Snek Centaur Platform specification is author
 **Source precedence (authoritative order, highest first)**:
 
 1. **Completed formal module content** — requirements, design, and exported interfaces in the eight spec modules once authored. A formal module section, once written and human-approved, supersedes anything in the informal spec that it covers.
-2. **The informal specification** (`informal-spec/team-snek-centaur-platform-spec-v2.2.md`) — a draft statement of intent and the source of truth for anything not yet covered by formal module content. The formal modules are being extracted from and refined out of this document, and it remains the reference for behaviour and design not yet captured in a module.
-3. **The general engine spec** (`general-centaur-game-engine-spec-v6.md`) — background context only, superseded by both the Team Snek informal spec and the formal modules wherever they differ. The Team Snek spec scopes the system to a single game with snake-specific mechanics, removing the general engine's ObjectType/Component System/ActionType/MutationRequest abstractions.
+2. **The informal specification** (`informal-spec/team-snek-centaur-platform-spec.md`) — a draft statement of intent and the source of truth for anything not yet covered by formal module content. The formal modules are being extracted from and refined out of this document, and it remains the reference for behaviour and design not yet captured in a module.
+3. **The general engine spec** (`general-centaur-game-engine-spec.md`) — background context only, superseded by both the Team Snek informal spec and the formal modules wherever they differ. The Team Snek spec scopes the system to a single game with snake-specific mechanics, removing the general engine's ObjectType/Component System/ActionType/MutationRequest abstractions.
 
 The informal spec is explicitly a **draft statement of intent**, not an authoritative rulebook. Where the human author and the formal module authoring process produce a different decision than what the informal spec says, the formal module wins and the informal spec is considered to have been refined in that area. The informal spec is not edited during the formal authoring process; instead, divergences are recorded as decisions in the affected module (e.g., in a resolved REVIEW item).
 
@@ -116,7 +116,7 @@ Each module passes through two phases sequentially. A module's Phase 1 must be c
 Write the Requirements section. This phase defines *what* the module must do.
 
 **Inputs available to the agent:**
-- The informal spec (`informal-spec/team-snek-centaur-platform-spec-v2.2.md`) — full document
+- The informal spec (`informal-spec/team-snek-centaur-platform-spec.md`) — full document
 - All dependency modules — full files (whatever sections are complete)
 - This instructions document
 
@@ -170,7 +170,7 @@ These rules govern what the AI agent should have loaded in context when working 
 
 Every session loads:
 - This instructions document (`SPEC-INSTRUCTIONS.md`)
-- The informal spec (`informal-spec/team-snek-centaur-platform-spec-v2.2.md`)
+- The informal spec (`informal-spec/team-snek-centaur-platform-spec.md`)
 
 ### Rule 2: Dependency Loading
 
@@ -288,7 +288,7 @@ We are working on the Team Snek Centaur Platform specification.
 
 Please read:
 - SPEC-INSTRUCTIONS.md (this document — already in project context)
-- team-snek-centaur-platform-spec-v2.2.md (informal spec — already in project context)
+- team-snek-centaur-platform-spec.md (informal spec — already in project context)
 - [List specific dependency module files to load, per Context Management Rules]
 
 Do not load or reference modules: [list peer/downstream modules to exclude]
@@ -359,8 +359,8 @@ If the resolved-REVIEW list within a module grows unwieldy over time, resolved e
 project-root/
 ├── SPEC-INSTRUCTIONS.md          ← this document
 ├── informal-spec/
-│   └── team-snek-centaur-platform-spec-v2.2.md  ← informal spec (source material)
-├── general-centaur-game-engine-spec-v6.md   ← background context (superseded)
+│   └── team-snek-centaur-platform-spec.md  ← informal spec (source material)
+├── general-centaur-game-engine-spec.md   ← background context (superseded)
 └── specs/
     ├── 01-game-rules.md
     ├── 02-platform-architecture.md

@@ -1403,12 +1403,12 @@ Each viewer client may have at most one inspected snake at a time. Replay inspec
 
 **Type**: Ambiguity
 **Phase**: Requirements
-**Context**: Consistent with 02-REVIEW-001, 06-REVIEW-007, 07-REVIEW-010. Requirements in this module were extracted from `team-snek-centaur-platform-spec-v2.2.md`. Resolution is shared with the prior reviews.
-**Question**: Confirm v2.2 is canonical. See 02-REVIEW-001.
+**Context**: Consistent with 02-REVIEW-001, 06-REVIEW-007, 07-REVIEW-010. Requirements in this module were extracted from the informal spec now canonicalised at `informal-spec/team-snek-centaur-platform-spec.md`. Resolution is shared with the prior reviews.
+**Question**: Confirm the current informal spec is canonical. See 02-REVIEW-001.
 **Informal spec reference**: N/A (meta).
 
-**Decision**: A — v2.2 is canonical, consistent with the prior resolution of 02-REVIEW-001 (and the parallel resolutions of 06-REVIEW-007 and 07-REVIEW-010).
-**Rationale**: Shared with 02-REVIEW-001. The `SPEC-INSTRUCTIONS.md` filename reference to v2.1 is stale; v2.2 is the current informal spec from which this module's requirements were extracted.
+**Decision**: A — the current (unversioned) informal spec is canonical, consistent with the prior resolution of 02-REVIEW-001 (and the parallel resolutions of 06-REVIEW-007 and 07-REVIEW-010).
+**Rationale**: Shared with 02-REVIEW-001. The earlier `SPEC-INSTRUCTIONS.md` filename drift has been resolved by renaming the informal spec to drop its version suffix; this module's requirements were extracted from that same content.
 **Affected requirements/design elements**: None (meta-question).
 
 ---

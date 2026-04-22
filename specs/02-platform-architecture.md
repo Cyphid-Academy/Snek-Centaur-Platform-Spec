@@ -866,16 +866,16 @@ export interface UnifiedWebApplicationScope {
 
 **Type**: Ambiguity
 **Phase**: Requirements
-**Context**: `SPEC-INSTRUCTIONS.md` references `team-snek-centaur-platform-spec-v2_1.md` as the informal source of truth, but the file present in the project root is `team-snek-centaur-platform-spec-v2.2.md`. This module's requirements were extracted from v2.2 on the assumption that v2.2 supersedes v2.1.
-**Question**: Confirm v2.2 is the current source of truth and that `SPEC-INSTRUCTIONS.md` is stale on the filename. If a v2.1 file existed previously and was updated, are there any v2.1-only requirements that should be carried forward independently?
+**Context**: At the time this module was authored, `SPEC-INSTRUCTIONS.md` and the informal-spec file on disk used different version suffixes in their filenames, raising a question about whether requirements in this module had been extracted from the correct source. The informal spec has since been renamed to drop its version suffix entirely (`informal-spec/team-snek-centaur-platform-spec.md`), and `SPEC-INSTRUCTIONS.md` has been updated to match, so the version-mismatch concern no longer applies. Requirements in this module were extracted from the content that is now the canonical (unversioned) informal spec.
+**Question**: Confirm the current informal spec is the source of truth and that no requirements need to be carried forward from any earlier draft.
 **Options**:
-- A: v2.2 is canonical; instructions doc filename is stale; no carry-forward.
-- B: Both versions matter; needs reconciliation pass before module 02 is considered complete.
+- A: Current informal spec is canonical; no carry-forward.
+- B: Earlier drafts matter; needs reconciliation pass before module 02 is considered complete.
 **Informal spec reference**: N/A (meta-question).
 
-**Decision**: A — v2.2 is canonical; no carry-forward from v2.1.
-**Rationale**: The v2.2 file is the current informal spec. `SPEC-INSTRUCTIONS.md`'s filename reference is stale and should be updated separately as an instructions-doc edit; it does not invalidate any module authoring done against v2.2.
-**Affected requirements/design elements**: None. This is a meta-question about source material; all of module 02's requirements were extracted from v2.2 and remain as drafted.
+**Decision**: A — the current informal spec is canonical; no carry-forward from earlier drafts.
+**Rationale**: The renamed file is the current informal spec. The earlier filename-version mismatch was a documentation drift issue and is resolved by the rename; it does not invalidate any module authoring done against the same content.
+**Affected requirements/design elements**: None. This is a meta-question about source material; all of module 02's requirements were extracted from the current informal spec and remain as drafted.
 
 ---
 

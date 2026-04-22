@@ -1294,16 +1294,16 @@ interface GameCentaurStateInitContract {
 
 ---
 
-### 06-REVIEW-007: Informal spec v2.1/v2.2 filename drift — **RESOLVED**
+### 06-REVIEW-007: Informal spec filename drift — **RESOLVED**
 
 **Type**: Ambiguity
 **Phase**: Requirements
-**Context**: `SPEC-INSTRUCTIONS.md` references `team-snek-centaur-platform-spec-v2_1.md` as the informal source of truth, but the file in the project root is `team-snek-centaur-platform-spec-v2.2.md`. This is the same issue flagged in 02-REVIEW-001. Requirements in this module were extracted from v2.2 on the same assumption (v2.2 supersedes v2.1). Flagging here for consistency; resolution should be shared with 02-REVIEW-001.
+**Context**: At the time this module was authored, `SPEC-INSTRUCTIONS.md` and the informal-spec file on disk used different version suffixes in their filenames — the same issue flagged in 02-REVIEW-001 — and requirements in this module were extracted from the on-disk content under the same assumption applied there. The informal spec has since been renamed to drop its version suffix entirely (`informal-spec/team-snek-centaur-platform-spec.md`) and `SPEC-INSTRUCTIONS.md` has been updated to match, so the version-mismatch concern no longer applies. Flagged here for consistency with 02-REVIEW-001.
 **Informal spec reference**: N/A (meta).
 
-**Decision**: v2.2 is canonical. `SPEC-INSTRUCTIONS.md` has been corrected per the 02-REVIEW-001 resolution. All requirements in this module were correctly extracted from v2.2.
-**Rationale**: See 02-REVIEW-001 resolution. v2.2 is the latest version present in the repository and supersedes v2.1.
-**Affected requirements/design elements**: None — requirements already reflect v2.2.
+**Decision**: The current (unversioned) informal spec is canonical, consistent with the 02-REVIEW-001 resolution. All requirements in this module were correctly extracted from that content.
+**Rationale**: See 02-REVIEW-001 resolution. The rename to an unversioned canonical filename eliminates the prior drift between `SPEC-INSTRUCTIONS.md` and the file on disk.
+**Affected requirements/design elements**: None — requirements already reflect the current informal spec.
 
 ---
 

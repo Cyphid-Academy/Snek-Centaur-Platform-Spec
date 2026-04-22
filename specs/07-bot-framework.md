@@ -1147,11 +1147,11 @@ If it's direct-to-SpacetimeDB, the framework reads it from its SpacetimeDB subsc
 
 **Type**: Ambiguity
 **Phase**: Requirements
-**Context**: Consistent with 02-REVIEW-001 and 06-REVIEW-007. Requirements in this module were extracted from `team-snek-centaur-platform-spec-v2.2.md` on the assumption it supersedes any v2.1 reference in SPEC-INSTRUCTIONS.md. Resolution is shared with the prior reviews.
-**Question**: Confirm v2.2 is canonical. See 02-REVIEW-001.
+**Context**: Consistent with 02-REVIEW-001 and 06-REVIEW-007. Requirements in this module were extracted from the informal spec now canonicalised at `informal-spec/team-snek-centaur-platform-spec.md` (previously a versioned filename that did not match the version referenced in `SPEC-INSTRUCTIONS.md`). Resolution is shared with the prior reviews.
+**Question**: Confirm the current informal spec is canonical. See 02-REVIEW-001.
 **Informal spec reference**: N/A (meta).
 
-**Decision**: Confirmed. v2.2 is canonical, consistent with 02-REVIEW-001 and 06-REVIEW-007.
+**Decision**: Confirmed. The current (unversioned) informal spec is canonical, consistent with 02-REVIEW-001 and 06-REVIEW-007.
 **Rationale**: See 02-REVIEW-001 resolution.
 **Affected requirements/design elements**: None.
 
