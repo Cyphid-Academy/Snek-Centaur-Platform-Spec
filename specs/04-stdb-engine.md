@@ -38,7 +38,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 ### 4.3 Game Initialisation
 
-**04-REQ-013**: The runtime shall expose a **privileged initialisation operation** that may be called exactly once per instance, before any connection is admitted, by the Convex orchestration path described in [02-REQ-019]. The caller shall be authenticated per [03-REQ-048]. The operation shall accept, at minimum: a fully specified initial game state comprising the board layout (cell terrain as a flat array per [01-REQ-008]–[01-REQ-013]), all snake starting states (positions, health, CentaurTeam assignments per [01-REQ-020]–[01-REQ-021]), and all initial item placements (per [01-REQ-017]); the dynamic gameplay parameters (food spawn rate, potion spawn rates, hazard damage, max health, timer budgets, max turns, and other runtime-behaviour parameters — but not board generation parameters, which are consumed by Convex and never reach STDB); the participating-CentaurTeam roster per [03-REQ-039]; and the game's unique identifier (used to validate the `aud` claim in connecting clients' JWTs per [03-REQ-023]). The operation shall not call `generateBoardAndInitialState()` — board generation is performed by Convex before the STDB instance is provisioned (see [02] §2.14). A per-game root seed ([01-REQ-059]) shall be accepted for turn-resolution randomness (per-turn seed derivation via `subSeed()`) and replay export ([04-REQ-061]), but not for board generation. No per-instance signing secret is seeded — client authentication is handled by SpacetimeDB's OIDC-based JWT validation against the Convex platform's public key (see [03] §3.17).
+**04-REQ-013**: The runtime shall expose a **privileged initialisation operation** that may be called exactly once per instance, before any connection is admitted, by the Convex orchestration path described in [02-REQ-019]. The caller shall be authenticated per [03-REQ-048]. The operation shall accept, at minimum: a fully specified initial game state comprising the board layout (cell terrain as a flat array per [01-REQ-008]–[01-REQ-013]), all snake starting states (positions, health, CentaurTeam assignments per [01-REQ-020]–[01-REQ-021]), and all initial item placements (per [01-REQ-017]); the dynamic gameplay parameters (food spawn rate, potion spawn rates, hazard damage, max health, timer budgets, max turns, and other runtime-behaviour parameters — but not board generation parameters, which are consumed by Convex and never reach STDB); the participating-CentaurTeam roster per [03-REQ-039]; and the game's unique identifier (used to validate the `aud` claim in connecting clients' JWTs per [03-REQ-023]). The operation shall not call `generateBoardAndInitialState()` — board generation is performed by Convex before the STDB instance is provisioned (see [02] §2.14). A per-game root seed ([01-REQ-059]) shall be accepted for turn-resolution randomness (per-turn seed derivation via `subSeed()`) and replay export ([04-REQ-061]), but not for board generation.
 
 **04-REQ-014**: Successful completion of the initialisation operation shall leave the runtime in a state where (a) the static board layout ([01-REQ-008] through [01-REQ-013]) is written, (b) each snake's initial state ([01-REQ-020], [01-REQ-021]) is written as the turn-0 snapshot, (c) initial food placements ([01-REQ-017]) are written as spawn-turn-0 items, (d) each CentaurTeam's initial time budget ([01-REQ-035]) is recorded, (e) the game's unique identifier is stored in `game_config` for `aud` claim validation by the `client_connected` callback (Section 4.4), and (f) the participating-CentaurTeam roster (per [03-REQ-039]) is available for use by the connection admission path.
 
@@ -56,13 +56,13 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-019**: The `client_connected` callback shall validate the JWT's `aud` claim against the game's unique identifier stored in `game_config` (Section 4.3), parse the `sub` claim via `parseSubClaim()` per [03] §4.4, validate the CentaurTeam binding against the participating roster, and derive an `agentId` via the JWT `sub` claim. Upon successful validation, the callback shall associate the calling connection's opaque connection identifier with the parsed CentaurTeam (except for spectator connections with `sub` prefix `"spectator:"`, which associate no CentaurTeam per [03-REQ-026]) and derived role (operator, bot, spectator, or coach). Coach connections (`sub` prefix `"coach:"` per [03-REQ-026a]) shall be associated with the team named in the embedded `centaurTeamId` for the purpose of read-side row-level filtering — coach views shall return the same per-team filtered subscription that a member of that team would receive — but shall be rejected by all reducers as ineligible to call any state-mutating reducer per [04-REQ-070]. This association shall persist for the lifetime of the connection, consistent with [03-REQ-021].
 
-**04-REQ-020**: The runtime shall maintain, for the full lifetime of the game instance, a **participant attribution record** (the `centaur_team_permissions` table) that maps each connection that has been successfully admitted via `client_connected` to an `Agent` value (as defined by [01]: `{kind: 'centaur_team', centaurTeamId}` for Centaur Server connections, or `{kind: 'operator', operatorUserId}` for operator connections). This mapping shall be derived from the JWT `sub` claim at connection time — the SpacetimeDB connection Identity is resolved to an `Agent` in the `client_connected` callback, not deferred to replay-export time. The record shall be retained for the full lifetime of the game instance. (Satisfies [03-REQ-044]. Resolves 04-REVIEW-011.)
+**04-REQ-020**: The runtime shall maintain, for the full lifetime of the game instance, a **participant attribution record** (the `centaur_team_permissions` table) that maps each connection that has been successfully admitted via `client_connected` to an `Agent` value (as defined by [01]: `{kind: 'centaur_team', centaurTeamId}` for Centaur Server connections, or `{kind: 'operator', operatorUserId}` for operator connections). This mapping shall be derived from the JWT `sub` claim in the `client_connected` callback. The record shall be retained for the full lifetime of the game instance. (Satisfies [03-REQ-044]. See resolved 04-REVIEW-011.)
 
 **04-REQ-021**: The participant attribution record shall not be mutated or deleted when the underlying connection is closed, whether by network interruption, client shutdown, or reconnection. A client that reconnects shall obtain a fresh connection identifier and a fresh `Agent`-mapped attribution entry; previous entries remain intact so that historical `stagedBy: Agent` references from earlier turns remain resolvable without re-consulting the original connection Identity.
 
 **04-REQ-022**: The `client_connected` callback shall disconnect any client whose JWT claims fail any of the criteria enumerated in [03-REQ-023] — including `aud` mismatch, unparseable `sub`, or CentaurTeam not found in the participating roster. A rejected connection shall not result in any association or attribution record being written.
 
-**04-REQ-023** *(negative)*: The runtime shall not accept any alternative admission mechanism (e.g., per-instance shared secrets, IP allowlists, direct credentials, application-level `register` reducers). Connection admission is governed exclusively by OIDC-validated JWTs issued by Convex per [03], with application-level claim validation in the `client_connected` callback.
+**04-REQ-023** *(negative)*: Connection admission is governed exclusively by OIDC-validated JWTs issued by Convex per [03], with application-level claim validation in the `client_connected` callback. The runtime shall not accept any alternative admission mechanism.
 
 ---
 
@@ -70,11 +70,11 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-024**: The runtime shall expose a **move-staging operation** that accepts, from a registered connection, a snake identifier and a direction ([01-REQ-001]). The runtime shall accept the operation only if the calling connection is registered as a human participant or bot participant for the CentaurTeam that owns the named snake; all other callers shall be rejected. (Satisfies [03-REQ-028] within the runtime.)
 
-**04-REQ-025**: The runtime shall record staged moves in an **append-only log**. A new staged move for a snake is appended as a new entry rather than overwriting any previous entry. The effective staged move for a snake at any point in time is the latest entry for that snake by timestamp. There is no separate cancel-move operation; a new staged move for the same snake supersedes the previous one by being the most recent entry. Staged-move entries are part of the historical record and are retained for the full game lifetime, not cleared at turn resolution. (Satisfies [02-REQ-011]. Amended per 06-REVIEW-004 resolution — staged moves are now an append-only log to guarantee that log entries always track with authoritative success.)
+**04-REQ-025**: The runtime shall record staged moves in an **append-only log**. A new staged move for a snake is appended as a new entry rather than overwriting any previous entry. The effective staged move for a snake at any point in time is the latest entry for that snake by timestamp. There is no separate cancel-move operation; a new staged move for the same snake supersedes the previous one by being the most recent entry. Staged-move entries are part of the historical record and are retained for the full game lifetime, not cleared at turn resolution. (Satisfies [02-REQ-011]. See resolved 06-REVIEW-004.)
 
-**04-REQ-026**: Each accepted staged move shall be recorded together with the `Agent` value (per 04-REQ-020) of the connection that wrote it (`stagedBy: Agent`), the wall-clock time at which the move was accepted, and the turn number in which it was staged. Because staged moves are append-only, each entry retains its writer's attribution permanently — there is no overwrite or discard of previous entries' attribution. (Amended per 06-REVIEW-004 resolution.)
+**04-REQ-026**: Each accepted staged move shall be recorded together with the `Agent` value (per 04-REQ-020) of the connection that wrote it (`stagedBy: Agent`), the wall-clock time at which the move was accepted, and the turn number in which it was staged. Each entry retains its writer's attribution permanently.
 
-**04-REQ-027**: The staged-move storage shall be **append-only and historical**: it forms part of the permanent game record. Staged-move entries are not cleared by turn resolution; they persist for the full game lifetime as a historical log of all staging actions. This enables downstream systems ([06], [08]) to reconstruct which moves were staged by whom at any point during the game, supporting sub-turn replay fidelity. (Amended per 06-REVIEW-004 resolution — staged moves are now part of the historical record.)
+**04-REQ-027**: The staged-move storage shall be **append-only and historical**: it forms part of the permanent game record. Staged-move entries are not cleared by turn resolution; they persist for the full game lifetime as a historical log of all staging actions. This enables downstream systems ([06], [08]) to reconstruct which moves were staged by whom at any point during the game, supporting sub-turn replay fidelity. (See resolved 06-REVIEW-004.)
 
 **04-REQ-028**: The runtime shall not validate move legality (e.g., reject moves that lead into walls) at the moment of staging. Legality is determined only during turn resolution, where a fatal direction kills the snake in Phase 3 per [01-REQ-044]. This preserves the "explore a direction to see its score" affordance described in [08]'s live-operator interface.
 
@@ -104,7 +104,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-037**: Turn resolution shall execute as a **single atomic transaction**, such that either every state mutation produced by the eleven-phase pipeline is observable to subscribed clients simultaneously, or none of them are. No intermediate state from within the resolution pipeline shall be observable to any subscribed client. (Restates [02-REQ-008] at this module's level of specificity.)
 
-**04-REQ-038**: Within the atomic transaction of turn resolution, the runtime shall, in order: (a) read the effective staged moves for the current turn (the latest entry per snake by timestamp from the append-only staged-moves log, each carrying its `stagedBy: Agent` per 04-REQ-026); (b) run the eleven-phase pipeline of [01-REQ-041]; (c) for each snake that moved, emit a movement event recording the direction moved, whether growth occurred, and the `Agent` value of the connection that staged the move that was consumed (or `null` if the move was determined by the fallback rule of [01-REQ-042] because no move was staged); (d) emit all other turn events required by [01-REQ-052] (Section 4.8); (e) append the new turn-`T+1` snake-state snapshots, updated item-lifetime records, and post-turn time-budget entries to the historical record; (f) *(removed — staged moves are append-only and not cleared per 04-REQ-027)*; (g) add the budget increment to each CentaurTeam's budget per [01-REQ-036].
+**04-REQ-038**: Within the atomic transaction of turn resolution, the runtime shall, in order: (a) read the effective staged moves for the current turn (the latest entry per snake by timestamp from the append-only staged-moves log, each carrying its `stagedBy: Agent` per 04-REQ-026); (b) run the eleven-phase pipeline of [01-REQ-041]; (c) for each snake that moved, emit a movement event recording the direction moved, whether growth occurred, and the `Agent` value of the connection that staged the move that was consumed (or `null` if the move was determined by the fallback rule of [01-REQ-042] because no move was staged); (d) emit all other turn events required by [01-REQ-052] (Section 4.8); (e) append the new turn-`T+1` snake-state snapshots, updated item-lifetime records, and post-turn time-budget entries to the historical record; (f) add the budget increment to each CentaurTeam's budget per [01-REQ-036].
 
 **04-REQ-039**: The `stagedBy` value captured in movement events shall be the `Agent` resolved from the staging connection's Identity at registration time per 04-REQ-020 and carried through from the staged-move record per 04-REQ-026. No further interpretation, mapping, or substitution of the `Agent` value is performed during turn resolution or replay export. (Satisfies [03-REQ-032]. Resolves 04-REVIEW-011.)
 
@@ -129,7 +129,7 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 - (g) **Potion spawning**: for each potion item spawned in Phase 8, a record capturing the new item's identifier, cell, and potion type.
 - (h) **Effect application**: for each effect that was moved from `pendingEffects` to `activeEffects` in Phase 9, a record capturing the affected snake, effect type, and expiry turn.
 - (i) **Effect cancellation**: for each effect that was removed in Phase 9 — whether by disruption-triggered cancellation per [01-REQ-031] or by natural expiry per [01-REQ-050] — a record capturing the affected snake, effect type, and the reason (`disruption` or `expiry`).
-- (j) **Hazard damage**: for each surviving snake that took hazard damage in Phase 5b without dying that turn, a record capturing the snake identifier, the hazard cell, the damage amount applied, and the resulting health value. Snakes that die *from* hazard damage in Phase 5 are covered by the death event (b) with cause `hazard` and shall not additionally emit a hazard_damage event. (Added per 04-REVIEW-003 resolution.)
+- (j) **Hazard damage**: for each surviving snake that took hazard damage in Phase 5b without dying that turn, a record capturing the snake identifier, the hazard cell, the damage amount applied, and the resulting health value. Snakes that die *from* hazard damage in Phase 5 are covered by the death event (b) with cause `hazard` and shall not additionally emit a hazard_damage event. (See resolved 04-REVIEW-003.)
 
 **04-REQ-044**: Each turn-event record shall include enough information for a replay or animation client to visualise the associated outcome without re-executing turn resolution. In particular, event records shall not require the client to diff successive snake-state snapshots to recover information that the event describes (e.g., a death event shall carry the cause explicitly rather than requiring the client to infer it from a snake's alive-to-dead transition).
 
@@ -189,9 +189,9 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-060**: After a win condition has been detected in Phase 10 of some turn `T_end` ([01-REQ-051], [01-REQ-054] through [01-REQ-057]), the runtime shall treat the game as **ended** for gameplay purposes: further move-staging and turn-declaration operations shall be rejected, and no further turns shall be resolved. Game-end rejection begins at the moment the final turn's transaction commits. In-flight staged moves or turn-declaration operations arriving after the commit of turn `T_end` shall be rejected as "game over" — there is no grace window between commit and enforcement.
 
-**04-REQ-061**: After game-end detection, the runtime shall make the complete historical record available to Convex for replay persistence ([05-REQ-040]). The complete record comprises the static board layout (as received from Convex at init time), the dynamic gameplay parameters seeded at initialisation, the per-game seed ([01-REQ-059], [01-REQ-060]) so that downstream systems can verify deterministic reproducibility per 04-REQ-069 (see 04-REVIEW-013; [01-REQ-059]'s "game client" exclusion does not apply to the privileged Convex replay-export caller authenticated per [03-REQ-048]), the full per-turn historical record of snake states (04-REQ-006), the full item-lifetime record (04-REQ-007), the full per-turn time-budget record (04-REQ-009), the full turn-timing record (04-REQ-010), the full turn-event record (04-REQ-011), and the participant attribution record of Section 4.4. Because `stagedBy` fields already carry `Agent` values (resolved at registration time per 04-REQ-020), no Identity→email/CentaurTeam-reference resolution step is required during replay export; the exported record already contains Convex-interpretable `Agent` values throughout. The complete record shall be bundled into the `GameEndNotification` payload of [04-REQ-061a] by the `notify_game_end` scheduled procedure (see §2.10, §2.11). The callback token authenticating the notification is a Convex-signed JWT; Convex validates it by signature verification and claims checking — no stored-token comparison is required. (See also [03-REQ-045].) *(Amended per 05-REVIEW-015 resolution: retrieval pattern resolved to bundled-in-notification; Convex-pull and runtime-push alternatives removed.)*
+**04-REQ-061**: After game-end detection, the runtime shall make the complete historical record available to Convex for replay persistence ([05-REQ-040]). The complete record comprises the static board layout (as received from Convex at init time), the dynamic gameplay parameters seeded at initialisation, the per-game seed ([01-REQ-059], [01-REQ-060]) so that downstream systems can verify deterministic reproducibility per 04-REQ-069 (see resolved 04-REVIEW-013), the full per-turn historical record of snake states (04-REQ-006), the full item-lifetime record (04-REQ-007), the full per-turn time-budget record (04-REQ-009), the full turn-timing record (04-REQ-010), the full turn-event record (04-REQ-011), and the participant attribution record of Section 4.4. The complete record shall be bundled into the `GameEndNotification` payload of [04-REQ-061a] by the `notify_game_end` scheduled procedure (see §2.10, §2.11). The callback token authenticating the notification is a Convex-signed JWT; Convex validates it by signature verification and claims checking — no stored-token comparison is required. (See also [03-REQ-045].)
 
-**04-REQ-061a**: The runtime shall notify Convex when a game has ended, consistent with [05-REQ-038]'s obligation that Convex learns of game end in order to orchestrate score display, replay persistence, teardown, and next-game preparation. Convex registers its interest in receiving such notifications for a given instance by providing a `gameEndCallbackUrl` and a `gameOutcomeCallbackToken` at init time (stored in `game_config`). The notification is sent by the `notify_game_end` scheduled procedure (§2.10) via `ctx.http.fetch()`, and carries the complete historical record bundled as `replayData` (§2.11) alongside the `GameOutcome`. *(Amended per 05-REVIEW-015 resolution: notification mechanism resolved to scheduled procedure with bundled replay data.)*
+**04-REQ-061a**: The runtime shall notify Convex when a game has ended, consistent with [05-REQ-038]'s obligation that Convex learns of game end in order to orchestrate score display, replay persistence, teardown, and next-game preparation. Convex registers its interest in receiving such notifications for a given instance by providing a `gameEndCallbackUrl` and a `gameOutcomeCallbackToken` at init time (stored in `game_config`). The notification is sent by the `notify_game_end` scheduled procedure (§2.10) via `ctx.http.fetch()`, and carries the complete historical record bundled as `replayData` (§2.11) alongside the `GameOutcome`.
 
 **04-REQ-062**: The replay-export client shall be authenticated as the Convex platform runtime per [03-REQ-048]. The runtime shall not permit any other caller to retrieve the bulk replay export. 04 requires only that the privilege be distinct from ordinary gameplay admission; detailed credential mechanics are owned by [03].
 
@@ -260,7 +260,7 @@ interface GameConfigRow {
 
 All gameplay fields map directly to `DynamicGameplayParams` ([02] §3.4). `gameId` satisfies 04-REQ-014e. `gameSeed` is required by `resolve_turn` to derive per-turn seeds via `subSeed(gameSeed, \`turn-${T}\`)` per [01-REQ-060] and is included in the replay export per 04-REQ-061. `gameEndCallbackUrl` is registered by Convex at init time per 04-REQ-061a. Board generation parameters (board dimensions, hazard %, fertile ground settings) are *not* stored — they are consumed entirely by Convex during board generation [04-REQ-017].
 
-**Design decision — game seed as init parameter**: 04-REQ-013 lists the game's unique identifier but does not explicitly list the game seed. However, `resolveTurn()` requires a `turnSeed` derived via `subSeed(gameSeed, ...)` ([01-REQ-060]), and 04-REQ-061 requires the seed in the replay export. The seed therefore must be provided at init time. It is generated by Convex alongside the initial game state during `generateBoardAndInitialState()` and passed to `initialize_game`. **DOWNSTREAM IMPACT**: [05] must include the game seed in the `initialize_game` call payload.
+The seed is generated by Convex alongside the initial game state during `generateBoardAndInitialState()` and passed to `initialize_game`. **DOWNSTREAM IMPACT**: [05] must include the game seed in the `initialize_game` call payload.
 
 **`board_state`** — Single-row table storing the static board layout. Uses the flat `ReadonlyArray<CellType>` encoding with `y * width + x` indexing per [01] DOWNSTREAM IMPACT note 3.
 
@@ -412,7 +412,7 @@ interface StagedMoveRow {
 }
 ```
 
-The `agentId` field carries the Convex record ID from the connection's `centaur_team_permissions` entry. Each staging action appends a new row; no rows are ever overwritten or deleted. The effective staged move for a snake at turn resolution time is determined by selecting the latest entry per snake by `stagedAtMs` for the current turn (see §2.7, Step 1). Historical entries across all turns are retained for the full game lifetime, enabling downstream systems ([06], [08]) to reconstruct the complete staged-move history for sub-turn replay. (Amended per 06-REVIEW-004 resolution.)
+The `agentId` field carries the Convex record ID from the connection's `centaur_team_permissions` entry. Each staging action appends a new row; no rows are ever overwritten or deleted. The effective staged move for a snake at turn resolution time is determined by selecting the latest entry per snake by `stagedAtMs` for the current turn (see §2.7, Step 1). Historical entries across all turns are retained for the full game lifetime, enabling downstream systems ([06], [08]) to reconstruct the complete staged-move history for sub-turn replay. (See resolved 06-REVIEW-004.)
 
 **Index**: Primary query pattern is `WHERE turn = T` for turn resolution, and full-table scan for replay export.
 
@@ -495,7 +495,7 @@ interface InitializeGameParams {
 **Reducer behaviour**:
 
 1. **Re-invocation guard** [04-REQ-016]: Read `game_runtime.initialized`. If true, reject with error.
-2. **Structural validation** [04-REQ-017]: Validate the received state — correct board dimensions (`width * height === cells.length`), all cell values are valid `CellType` values, snake count matches `teams.length * snakesPerTeam`, all item positions are within board bounds with valid `ItemType` values, at least two CentaurTeams, each snake has body length ≥ 1. On validation failure, return a synchronous error to the caller (a coding-error check, not a user-facing failure path — see resolved 04-REVIEW-008).
+2. **Structural validation** [04-REQ-017]: Validate the received state — correct board dimensions (`width * height === cells.length`), all cell values are valid `CellType` values, snake count matches `teams.length * snakesPerTeam`, all item positions are within board bounds with valid `ItemType` values, at least two CentaurTeams, each snake has body length ≥ 1. On validation failure, return a synchronous error to the caller (see resolved 04-REVIEW-008).
 3. **Write static tables**: Insert `game_config` row (gameId, gameSeed, gameEndCallbackUrl, gameOutcomeCallbackToken, all dynamic gameplay params), `board_state` row (boardSize, width, height, cells), and one `centaur_team_roster` row per CentaurTeam (centaurTeamId, serialized operatorUserIds).
 4. **Write turn-0 historical records** [04-REQ-014b, 04-REQ-014c, 04-REQ-014d]:
    - Insert one `snake_states` row per snake for turn 0, with denormalized `invulnerabilityLevel` and `visible` computed via the shared engine's `invulnerabilityLevel()` and `isVisible()` functions.
@@ -532,7 +532,7 @@ Invoked automatically by SpacetimeDB when a client establishes a WebSocket conne
 
 On any validation failure at steps 3–5, the client is disconnected immediately and no `centaur_team_permissions` row is written [04-REQ-022].
 
-**SpacetimeDB Identity semantics**: SpacetimeDB connection `Identity` values are opaque and may be reused across reconnections for the same client. Per 04-REQ-021, a reconnecting client obtains a fresh `centaur_team_permissions` entry if its Identity is new, or the existing entry is sufficient if the Identity is reused. Previous entries are never deleted. This design is robust regardless of whether SpacetimeDB Identity is per-connection-ephemeral or per-client-persistent.
+**SpacetimeDB Identity semantics**: SpacetimeDB connection `Identity` values are opaque and may be reused across reconnections for the same client. Per 04-REQ-021, a reconnecting client obtains a fresh `centaur_team_permissions` entry if its Identity is new, or the existing entry is sufficient if the Identity is reused. Previous entries are never deleted.
 
 #### 2.3.2 `client_disconnected` Callback
 
@@ -641,7 +641,7 @@ for each CentaurTeam:
 
 This is applied when initializing `centaur_team_turn_state` at the start of each turn.
 
-**Rationale for scheduled reducer**: A scheduled reducer is the natural SpacetimeDB mechanism for real-time clock expiry detection. It satisfies 04-REQ-068's "no external systems during gameplay" invariant because the scheduling is internal to SpacetimeDB — no external trigger from Convex or any other system is involved. This aligns with resolved 04-REVIEW-001 (clock-expiry detection mechanism left to design).
+**Rationale for scheduled reducer**: A scheduled reducer is the natural SpacetimeDB mechanism for real-time clock expiry detection. It satisfies 04-REQ-068's "no external systems during gameplay" invariant because the scheduling is internal to SpacetimeDB — no external trigger from Convex or any other system is involved. (See resolved 04-REVIEW-001.)
 
 ---
 
@@ -703,14 +703,10 @@ reducer resolve_turn():
     insert time_budget_states row for turn T
   insert turns row for turn T (turnStartTimeMs, resolutionStartTimeMs)
 
-  // — Step 7: (Removed — staged moves are append-only and not cleared) —
-  // Staged-move rows persist as historical record [04-REQ-027].
-  // No deletion occurs; the table retains all staging actions across all turns.
-
-  // — Step 8: Advance turn [04-REQ-042] —
+  // — Step 7: Advance turn [04-REQ-042] —
   T_next = T + 1
 
-  // — Step 9: Apply budget increment for next turn [04-REQ-038g, 01-REQ-036] —
+  // — Step 8: Apply budget increment for next turn [04-REQ-038f, 01-REQ-036] —
   for each CentaurTeam:
     budgetMs += config.budgetIncrementMs
     cap = config.maxTurnTimeMs
@@ -719,11 +715,11 @@ reducer resolve_turn():
       declaredTurnOver = (CentaurTeam has no alive snakes) [04-REQ-034]
       remainingClockMs = perTurnMs
 
-  // — Step 10: Update game_runtime —
+  // — Step 9: Update game_runtime —
   game_runtime.currentTurn = T_next
   game_runtime.turnStartTimeMs = now
 
-  // — Step 11: Check game-end [04-REQ-060] —
+  // — Step 10: Check game-end [04-REQ-060] —
   if result.outcome.kind !== 'in_progress':
     game_runtime.gameEnded = true
     game_runtime.terminalOutcomeJson = JSON.stringify(result.outcome)
@@ -738,7 +734,7 @@ reducer resolve_turn():
 
 **`stagedBy` capture** [04-REQ-038c, 04-REQ-039]: The `agentId` stored in the latest `staged_moves` entry per snake (written at staging time per Section 2.4) is read in step 1 and passed to `resolveTurn()` as `StagedMove.stagedBy`. For snakes where no move was staged for the current turn (no entries with `turn = T`), `resolveTurn()` returns `stagedBy: null` in the movement event per 04-REQ-040.
 
-**GameState assembly**: Module 01's `GameState` aggregate shape is now exported as `interface GameState { board, snakes, items, clocks }` ([01] DOWNSTREAM IMPACT note 8, resolved 01-REVIEW-013). This module assembles the exported `GameState` from table rows: `board: Board` from `board_state`; `snakes: ReadonlyArray<SnakeState>` from the latest `snake_states` rows (turn T); `items: ReadonlyArray<ItemState>` from active `item_lifetimes` rows (spawnTurn ≤ T AND destroyedTurn IS NULL or > T); `clocks: ReadonlyArray<CentaurTeamClockState>` from `centaur_team_turn_state` combined with `time_budget_states`. The field names and types align exactly with Module 01's exported interface.
+**GameState assembly**: Module 01's `GameState` aggregate shape is exported as `interface GameState { board, snakes, items, clocks }` ([01] DOWNSTREAM IMPACT note 8; see resolved 01-REVIEW-013). This module assembles the exported `GameState` from table rows: `board: Board` from `board_state`; `snakes: ReadonlyArray<SnakeState>` from the latest `snake_states` rows (turn T); `items: ReadonlyArray<ItemState>` from active `item_lifetimes` rows (spawnTurn ≤ T AND destroyedTurn IS NULL or > T); `clocks: ReadonlyArray<CentaurTeamClockState>` from `centaur_team_turn_state` combined with `time_budget_states`. The field names and types align exactly with Module 01's exported interface.
 
 **Determinism** [04-REQ-069]: Given identical game seeds, configurations, and staged-move sequences, `resolveTurn()` produces identical results because (a) the shared engine's turn resolution is a pure function of its inputs, (b) all randomness is seed-derived via `subSeed()` and `rngFromSeed()`, and (c) the staged-move map is assembled deterministically from the table.
 
@@ -774,7 +770,7 @@ The `turn_events` table stores each event as a row with `eventType` discriminant
 
 This total order is deterministic, derivable from the event data alone, and stable across independent replays of the same game seed [04-REQ-069]. No stored index is needed.
 
-**`hazard_damage` event** (04-REVIEW-003 resolution): Emitted for each surviving snake that took hazard damage in Phase 5b without dying that turn. Snakes that die from hazard damage emit only a `snake_died` event with `cause: 'hazard'` — no additional `hazard_damage` event. This prevents double-counting while satisfying 04-REQ-044's requirement that event records carry enough information to avoid snapshot diffing.
+**`hazard_damage` event** (see resolved 04-REVIEW-003): Emitted for each surviving snake that took hazard damage in Phase 5b without dying that turn. Snakes that die from hazard damage emit only a `snake_died` event with `cause: 'hazard'` — no additional `hazard_damage` event. This prevents double-counting while satisfying 04-REQ-044's requirement that event records carry enough information to avoid snapshot diffing.
 
 ---
 
@@ -883,7 +879,7 @@ The replay-export client (Convex, authenticated per [03-REQ-048]) bypasses all v
 
 Satisfies 04-REQ-060, 04-REQ-061a, 04-REQ-065.
 
-When `resolve_turn` detects a terminal `GameOutcome` (victory, draw, or max-turns-reached) in step 11, it:
+When `resolve_turn` detects a terminal `GameOutcome` (victory, draw, or max-turns-reached) in step 10, it:
 1. Sets `game_runtime.gameEnded = true` and stores the terminal outcome.
 2. Inserts a row into the `game_end_notification_schedule` schedule table, which triggers the `notify_game_end` **procedure** to fire immediately (post-commit).
 
@@ -897,11 +893,11 @@ The `notify_game_end` **scheduled procedure**:
 5. Sends an HTTP POST to `gameEndCallbackUrl` via `ctx.http.fetch()` with the notification payload as a JSON request body and the `gameOutcomeCallbackToken` as a Bearer token in the Authorization header.
 6. On HTTP failure (non-2xx response or network error): retries with exponential backoff (initial delay 1s, max 3 retries). If all retries fail, the notification is lost but the game state remains correct — Convex can detect stale games via polling as a fallback.
 
-Once Convex responds with a 2xx status, the procedure's work is complete. Convex will tear down the STDB instance using its platform-level management authority — the instance has no self-teardown capability. *(Amended per 05-REVIEW-015 resolution: replay data bundled into notification.)*
+Once Convex responds with a 2xx status, the procedure's work is complete. Convex will tear down the STDB instance using its platform-level management authority — the instance has no self-teardown capability.
 
-**Design decision — scheduled procedure, not reducer**: The notification is sent from a scheduled **procedure** rather than a scheduled reducer. SpacetimeDB Procedures (beta) support outgoing HTTP via `ctx.http.fetch()`, whereas reducers do not have access to network I/O. Using a procedure also ensures the HTTP call is a side effect that does not participate in the triggering reducer's ACID transaction — if the HTTP call fails, the game state remains correct.
+**Design decision — scheduled procedure for HTTP delivery**: The notification is sent from a scheduled **procedure**. SpacetimeDB Procedures (beta) support outgoing HTTP via `ctx.http.fetch()`, which reducers do not. The HTTP call is a side effect that does not participate in the triggering reducer's ACID transaction, so a failed HTTP call leaves the game state correct.
 
-**Design decision — Convex-signed callback token, not in-module JWT construction**: Rather than having the STDB module construct and sign its own JWT (which would require crypto operations in the WASM runtime), Convex pre-signs a scoped callback token at game provisioning time and passes it via `initialize_game`. This keeps Convex as the sole credential issuer (03-REQ-037) and avoids embedding any cryptographic signing material or operations in the WASM runtime. The token has a 2-hour lifetime (`exp: now + 2h` at provisioning time), which is well in excess of the maximum expected game duration.
+**Design decision — Convex-signed callback token**: Convex pre-signs a scoped callback token at game provisioning time and passes it via `initialize_game`. This keeps Convex as the sole credential issuer (03-REQ-037) and avoids embedding any cryptographic signing material or operations in the WASM runtime. The token has a 2-hour lifetime (`exp: now + 2h` at provisioning time), which is well in excess of the maximum expected game duration.
 
 **JWT claims contract for the game-outcome callback token** (issued by Convex at provisioning time):
 - `iss`: `CONVEX_SITE_URL` (Convex as issuer).
@@ -919,7 +915,7 @@ The Convex callback endpoint validates the token by verifying the RS256 signatur
 
 Satisfies 04-REQ-061 through 04-REQ-065.
 
-The complete historical record is bundled into the `GameEndNotification` payload by the `notify_game_end` scheduled procedure (Section 2.10). This is the **runtime-push-bundled** pattern: the STDB procedure reads all replay tables and includes them in the same HTTP POST that notifies Convex of the game outcome.
+The complete historical record is bundled into the `GameEndNotification` payload by the `notify_game_end` scheduled procedure (Section 2.10). The STDB procedure reads all replay tables and includes them in the same HTTP POST that notifies Convex of the game outcome.
 
 **Bundled tables**: The procedure reads all data from:
 
@@ -930,7 +926,7 @@ The complete historical record is bundled into the `GameEndNotification` payload
 5. `turns` — all turn timing records.
 6. `snake_states` — all per-turn per-snake state snapshots.
 7. `item_lifetimes` — all item lifetime records (complete with spawn and destroy turns).
-8. `staged_moves` — complete append-only staged-move history across all turns, including per-entry agent attribution and timestamps [04-REQ-025, 04-REQ-027]. This is a primary replay table (not residual); its entries enable downstream systems ([06], [08]) to reconstruct which moves were staged by whom at any sub-turn timestamp.
+8. `staged_moves` — complete append-only staged-move history across all turns, including per-entry agent attribution and timestamps [04-REQ-025, 04-REQ-027]. Entries enable downstream systems ([06], [08]) to reconstruct which moves were staged by whom at any sub-turn timestamp.
 9. `time_budget_states` — all per-turn per-CentaurTeam budget records.
 10. `turn_events` — all turn events across all turns.
 
@@ -940,7 +936,7 @@ The complete historical record is bundled into the `GameEndNotification` payload
 
 **Instance availability** [04-REQ-063]: The STDB instance remains available (not torn down) until Convex has successfully received the bundled notification (2xx response). After Convex confirms receipt, it tears down the instance using its platform-level management authority per [02-REQ-021]; the instance has no self-teardown capability.
 
-**Design decision — bundled in notification vs Convex-pull**: The replay data is bundled into the game-end notification rather than retrieved separately by Convex because (a) SpacetimeDB's Procedures (beta) support reading all tables within the module and serializing them as JSON, (b) bundling eliminates a separate Convex-pull HTTP action and the need to keep the instance alive while Convex schedules and executes the retrieval, (c) Convex can tear down the instance immediately upon confirming receipt, reducing resource consumption, and (d) the procedure runs post-commit so the data reflects the final game state. The payload size is bounded by the game's turn count and player count — for the expected game sizes (≤ 300 turns, ≤ 6 teams), the JSON payload is well within HTTP request size limits. *(Amended per 05-REVIEW-015 resolution: replaced Convex-pull with bundled notification.)*
+**Design decision — bundled in notification**: SpacetimeDB's Procedures (beta) support reading all tables within the module and serializing them as JSON, allowing the replay payload to be bundled into the same HTTP POST. The procedure runs post-commit, so the data reflects the final game state. Convex can tear down the instance immediately upon confirming receipt. The payload size is bounded by the game's turn count and player count — for the expected game sizes (≤ 300 turns, ≤ 6 teams), the JSON payload is well within HTTP request size limits. (See resolved 05-REVIEW-015.)
 
 ---
 
@@ -1120,7 +1116,7 @@ type DeathCause =
 type AgentId = string
 ```
 
-The stored event payload shapes match [01] §2.11's `TurnEvent` union plus the module 04 addition of `hazard_damage` (04-REVIEW-003 resolution). `Cell` and `DeathCause` are re-exported from [01] §3.1–3.2. `AgentId` is a plain string — the Convex record ID of either a CentaurTeam (`centaur_teams._id`) or an Operator (`users._id`). The `payloadJson` column in the `turn_events` table stores the `TurnEventPayload` variant serialized as JSON.
+The stored event payload shapes match [01] §2.11's `TurnEvent` union plus the module 04 addition of `hazard_damage` (see resolved 04-REVIEW-003). `Cell` and `DeathCause` are re-exported from [01] §3.1–3.2. `AgentId` is a plain string — the Convex record ID of either a CentaurTeam (`centaur_teams._id`) or an Operator (`users._id`). The `payloadJson` column in the `turn_events` table stores the `TurnEventPayload` variant serialized as JSON.
 
 **DOWNSTREAM IMPACT**: [08]'s replay viewer and animation layer must handle all 10 event kinds, including `hazard_damage`. The canonical ordering (phase → event-type class → ascending snake/item ID) is derivable from the event data per the deterministic rules in §2.8 [04-REQ-045].
 
@@ -1159,7 +1155,7 @@ type GameOutcome =
 
 `GameOutcome` matches [01] §3.4 but uses `Record<string, number>` for scores (JSON-serializable form of `ReadonlyMap<CentaurTeamId, number>`). The `error` variant has no `scores` field (scores are meaningless for interrupted games); its `reason` field is a human-readable string describing the interruption cause. `finalTurn` is the turn number at which the terminal outcome was detected; for error cases, this is the last successfully resolved turn (may be 0 if the error occurred before any turn was resolved).
 
-`ReplayData` bundles the complete historical record from all STDB tables (Section 2.11). For normal outcomes, `replayData` is non-null and contains the full game history. For error outcomes, `replayData` is `null` (replay is not meaningful for interrupted games). The row types (`GameConfigRow`, `BoardStateRow`, etc.) are the table schemas defined in Section 2. *(Amended per 05-REVIEW-015 resolution: replay data bundled into notification.)*
+`ReplayData` bundles the complete historical record from all STDB tables (Section 2.11). For normal outcomes, `replayData` is non-null and contains the full game history. For error outcomes, `replayData` is `null` (replay is not meaningful for interrupted games). The row types (`GameConfigRow`, `BoardStateRow`, etc.) are the table schemas defined in Section 2.
 
 **DOWNSTREAM IMPACT**: [05] must implement an HTTP action endpoint that receives this payload at the `gameEndCallbackUrl` registered during `initialize_game`. The endpoint authenticates the caller by verifying the Convex-signed callback token's RS256 signature and claims (no stored-token comparison) and triggers game-end orchestration (score recording, replay persistence from the bundled `replayData`, and immediate STDB instance teardown). The endpoint must handle both normal outcomes (victory, draw) and error outcomes appropriately.
 
@@ -1188,7 +1184,7 @@ The WASM binary encapsulates the complete game engine module: all table schemas,
 
 4. **[05] must store the WASM binary in Convex file storage and use it for provisioning.** The binary is uploaded by the build pipeline and retrieved at game-creation time for the single-step `POST /v1/database` provisioning (Section 3.4).
 
-5. **[08] must handle all 10 turn event kinds in its renderers.** The closed event set (Section 3.2) includes `hazard_damage` as a module 04 addition beyond [01]'s 9-kind set. The canonical ordering is derivable from event data per the deterministic rules in §2.8.
+5. **[08] must handle all 10 turn event kinds in its renderers.** The closed event set (Section 3.2) includes `hazard_damage` as a module 04 addition. The canonical ordering is derivable from event data per the deterministic rules in §2.8.
 
 6. **[08] must design subscription queries per Section 2.12.** The four subscription patterns (live view, historical scrubbing, turn-transition animation, full-game catch-up) define the client-side data access contract. All subscriptions are subject to visibility filtering: for `snake_states` and `staged_moves`, clients must subscribe to the corresponding visibility Views (`snake_states_view`, `staged_moves_view`) rather than the raw tables. Other tables are subscribed to directly.
 
