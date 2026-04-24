@@ -88,7 +88,7 @@ Progress on the modular spec (see `SPEC-INSTRUCTIONS.md` for the phase/module fr
 - **Module 05 — convex-platform**: Phase 2 complete. 0 REVIEW items open.
 - **Module 06 — centaur-state**: Phase 2 complete. 0 REVIEW items open.
 - **Module 07 — bot-framework**: Phase 2 complete. 0 REVIEW items open.
-- **Module 08 — centaur-server-app**: Phase 2 complete. 2 REVIEW items open (022, 023).
+- **Module 08 — centaur-server-app**: Phase 2 complete. 0 REVIEW items open.
 - **Module 09 — platform-ui**: Phase 1 (Requirements) drafted. (Module absorbed into Module 08; retained as a redirect stub.)
 
 Update this list as modules advance. Keep each entry to a single line — phase status and REVIEW count only. Detail about resolved items, cascades, and rationale belongs in the module files (in the resolved REVIEW item bodies), not here.
