@@ -757,7 +757,7 @@ interface GameInvitationResponse {
 }
 ```
 
-`GameConfig` is re-exported from Module 01 (Section 3.3). `centaurTeamId` is used directly as the `CentaurTeamId` in `Agent` values (`{kind: 'centaur_team', centaurTeamId}`) — it is the Convex `centaur_teams._id` string. `operatorUserId` in the roster is the Convex `users._id` string of an operator (team member).
+`GameConfig` is re-exported from Module 01 (Section 3.3) and carries both the `orchestration` subtree (board size, snakes per team, hazard percentage, fertile-ground parameters — so the server can render / reason about the generated board) and the `runtime` subtree (max health, spawn rates, clock parameters — so the server can configure its bot framework). See resolved [01-REVIEW-017]. `centaurTeamId` is used directly as the `CentaurTeamId` in `Agent` values (`{kind: 'centaur_team', centaurTeamId}`) — it is the Convex `centaur_teams._id` string. `operatorUserId` in the roster is the Convex `users._id` string of an operator (team member).
 
 **DOWNSTREAM IMPACT**: [05] must construct `GameInvitationPayload` during game-start orchestration and send it via HTTP POST to each team's `/.well-known/snek-game-invite` endpoint. [08] must implement the `/.well-known/snek-game-invite` endpoint handler that receives this payload and returns a `GameInvitationResponse`.
 
