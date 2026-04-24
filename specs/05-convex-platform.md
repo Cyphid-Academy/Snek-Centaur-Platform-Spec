@@ -64,39 +64,45 @@
 
 ### 5.5 Game Configuration
 
-**05-REQ-022**: Convex shall be the sole source of truth for the configured parameter values of every game. Game configuration parameters live on the game object; rooms do not hold configuration state. At initialization time per [05-REQ-032], only the dynamic gameplay parameters (per [05-REQ-032d]) and the pre-computed initial game state are supplied to the SpacetimeDB game instance; board generation parameters are consumed by Convex during board generation and are not forwarded to STDB. *(See resolved 05-REVIEW-008.)*
+**05-REQ-022**: Convex shall be the sole source of truth for the configured parameter values of every game. Game configuration parameters live on the game object; rooms do not hold configuration state. At initialization time per [05-REQ-032], only `config.runtime` (a `GameRuntimeConfig` per [01] §3.3 and [05-REQ-032d]) and the pre-computed initial game state are supplied to the SpacetimeDB game instance; `config.orchestration` is consumed by Convex during board generation and is not forwarded to STDB. *(See resolved 05-REVIEW-008.)*
 
-**05-REQ-023**: The closed set of game-configuration parameters shall be the following. Each parameter has a type, a default value, and (where applicable) an acceptable range. Convex shall reject any attempt to set a parameter to a value outside its defined range or type.
+**05-REQ-023**: The closed set of game-configuration parameters shall be the following. The game-rules parameters are partitioned into `config.orchestration` and `config.runtime` subtrees that mirror [01]'s `GameOrchestrationConfig` and `GameRuntimeConfig` field-for-field (see [01] §3.3 and resolved [01-REVIEW-017]); platform-lifecycle parameters live as top-level fields on the game record alongside `config`. Each parameter has a type, a default, and (where applicable) an acceptable range. Convex shall reject any attempt to set a parameter to a value outside its defined range or type.
+
+Game-rules parameters (`config` subtrees):
+
+| Path | Type | Default | Range | Notes |
+|------|------|---------|-------|-------|
+| `config.orchestration.boardSize` | `BoardSize` enum | `"medium"` | `"small" \| "medium" \| "large" \| "giant"` | Domain enum owned by [01] |
+| `config.orchestration.snakesPerTeam` | Integer | 5 | 1–10 | Consumed by Convex during board generation; not sent to STDB |
+| `config.orchestration.hazardPercentage` | Integer | 0 | 0–30 | Consumed by Convex during board generation |
+| `config.orchestration.fertileGround.density` | Integer % | 30 | 0–90 | `0` disables fertile ground ([01-REQ-069]) |
+| `config.orchestration.fertileGround.clustering` | Integer | 10 | 1–20 | No effect when density is 0 |
+| `config.runtime.maxHealth` | Integer | 100 | 1–500 | Starting and restored health |
+| `config.runtime.maxTurns` | Integer | 100 | 0 or 1–1000 | `0` = unlimited ([01-REQ-058] / [01-REQ-066]) |
+| `config.runtime.hazardDamage` | Integer | 15 | 1–100 | Health lost per turn on a hazard cell |
+| `config.runtime.food.spawnRate` | Decimal | 0.5 | 0–5 | Expected food per turn |
+| `config.runtime.invulnPotions.spawnRate` | Decimal | 0.15 | 0–0.2 | `0` disables ([01-REQ-072]) |
+| `config.runtime.invisPotions.spawnRate` | Decimal | 0.1 | 0–0.2 | `0` disables ([01-REQ-073]) |
+| `config.runtime.clock.initialBudgetMs` | Milliseconds | 60000 | 0–600000 | Starting chess-timer budget per Centaur Team |
+| `config.runtime.clock.budgetIncrementMs` | Milliseconds | 500 | 100–5000 | Added to each Centaur Team's budget each turn |
+| `config.runtime.clock.firstTurnTimeMs` | Milliseconds | 60000 | 1000–300000 | Applies to turn 0 only |
+| `config.runtime.clock.maxTurnTimeMs` | Milliseconds | 10000 | 100–300000 | Per-turn clock cap on turns 1+ |
+
+Platform-lifecycle parameters (top-level columns on the `games` row, outside `config`):
 
 | Parameter | Type | Default | Range | Notes |
 |-----------|------|---------|-------|-------|
-| Board size | Enum | Medium | Small \| Medium \| Large \| Giant | Domain enum owned by [01] |
-| Max turn time | Seconds | 10 | 1–300 | Per-turn clock cap |
-| First turn time | Seconds | 60 | — | Applies to turn 0 only |
-| Initial time budget | Seconds | 60 | ≥ 0 | Starting chess-timer budget per Centaur Team |
-| Budget increment | Milliseconds | 500 | 100–5000 | Added to each Centaur Team's budget each turn |
-| Snakes per team | Integer | 3 | 1–10 | Number of snakes each Centaur Team fields |
-| Max turns | Integer (optional) | off | ≥ 1 when set | Off = last-team-standing only |
-| Max health | Integer | 100 | ≥ 1 | Starting and restored health |
-| Hazard % | Integer | 0 | 0–30 | |
-| Hazard damage | Integer | 15 | 1–100 | Health lost per turn on a hazard cell |
-| Food spawn rate | Decimal | 0.5 | 0–5 | Expected food per turn |
-| Fertile ground | Boolean | off | — | |
-| Fertile density | Integer % | 30 | 1–90 | Only meaningful when fertile ground is on |
-| Fertile clustering | Integer | 10 | 1–20 | Only meaningful when fertile ground is on |
-| Invulnerability potions | Boolean | off | — | |
-| Invuln potion spawn rate | Decimal | 0.15 | 0.01–0.2 | Only meaningful when invuln potions on |
-| Invisibility potions | Boolean | off | — | |
-| Invis potion spawn rate | Decimal | 0.1 | 0.01–0.2 | Only meaningful when invis potions on |
-| Skip start confirmation | Boolean | off | — | |
-| Tournament mode | Boolean | off | — | Enables tournament parameters below |
-| Tournament rounds | Integer | 1 | ≥ 1 | Required when tournament mode on |
-| Tournament interlude | Seconds | 30 | ≥ 0 | Required when tournament mode on |
-| Scheduled start time | Datetime | now + 10 min | — | Required when tournament mode on |
+| `skipStartConfirmation` | Boolean | `false` | — | Bypasses the administrator's confirm step in game-start orchestration |
+| `tournamentMode` | Boolean | `false` | — | Enables tournament fields below |
+| `tournamentRounds` | Integer \| null | null | ≥ 1 when set | Required when `tournamentMode` is `true` |
+| `tournamentInterludeSec` | Integer \| null | null | ≥ 0 when set | Required when `tournamentMode` is `true` |
+| `scheduledStartTime` | Unix ms \| null | null | — | Required when `tournamentMode` is `true` |
+
+Units inside `config` are milliseconds throughout, consistent with [01]'s canonical types; the UI converts to/from seconds at the editor boundary. Platform-lifecycle fields retain seconds where they describe wall-clock durations visible to administrators in seconds (`tournamentInterludeSec`), since they never cross into the engine's type system.
 
 **05-REQ-024**: Convex shall associate a game-configuration parameter set with every game. The parameter set is editable while the game is in `not-started` status. When the game transitions to `playing`, the parameter set is frozen as an immutable snapshot for the remainder of the game's lifetime. *(See resolved 05-REVIEW-008.)*
 
-**05-REQ-025**: Parameters whose meaning is conditional on another parameter (for example, fertile density and fertile clustering depend on fertile ground being on) shall be validated in a manner consistent with those conditions. Convex shall not refuse to persist a dependent parameter's value merely because its gating parameter is currently off, but shall also not supply that dependent value to the SpacetimeDB game instance when its gating parameter is off.
+**05-REQ-025**: Parameters whose meaning is conditional on another parameter shall be validated consistently with that condition. Within `config` (the mirrored [01].GameConfig) the "disabled" state of a feature is encoded by a zero sentinel on the dependent numeric field itself — `fertileGround.density = 0`, `invulnPotions.spawnRate = 0`, `invisPotions.spawnRate = 0`, or `maxTurns = 0` — so no separate gating flag needs to be validated against a dependent. `fertileGround.clustering` has no effect when `fertileGround.density` is 0; Convex shall persist any in-range clustering value regardless and the value shall simply be ignored during board generation. Platform-lifecycle fields that do carry a boolean gate (`tournamentMode`) follow the prior rule: when the gate is off, dependent fields (`tournamentRounds`, `tournamentInterludeSec`, `scheduledStartTime`) may be persisted but shall not be acted on by the orchestration. See resolved [01-REVIEW-017].
 
 **05-REQ-026** *(negative)*: The game-configuration parameter set shall not include any parameter that configures bot behaviour, heuristic defaults, or Drive management. Such parameters are owned by [06] and by the Snek Centaur Server web application per [02-REQ-045] through [02-REQ-047].
 
@@ -119,7 +125,7 @@
 1. Freeze the game configuration ([05-REQ-024]).
 2. Obtain the initial game state: if the not-yet-started game record's `boardPreviewLocked` flag is `true` ([05-REQ-032b]), reuse the starting state already persisted on the game record by the most recent preview generation; otherwise (`boardPreviewLocked` is `false`), run `generateBoardAndInitialState()` from the shared engine codebase ([02-REQ-035]) as pure TypeScript directly within a Convex mutation to produce a fresh initial game state from a fresh seed and overwrite the persisted starting state on the game record (the regenerated state is not surfaced to any configuration-mode UI; it becomes visible only when delivered to operators via SpacetimeDB once the game enters `playing` status). Bounded-retry feasibility logic ([01-REQ-061]) runs within this mutation; if all attempts fail, the mutation produces a structured `BoardGenerationFailure` error that is surfaced reactively to the administrative actor (see [05-REQ-032c]), and the orchestration does not proceed. *(See resolved 08-REVIEW-015.)*
 3. Retrieve the pre-compiled WASM module binary from Convex file storage ([05-REQ-073]) and provision a fresh SpacetimeDB game instance by submitting the binary to the self-hosted SpacetimeDB management API (`POST /v1/database` with the WASM binary in the request body), authenticated per [03-REQ-048]. This single operation creates the database and deploys the game engine module.
-4. Invoke the instance's privileged initialization reducer (owned by [04]) via a Convex HTTP action calling SpacetimeDB's HTTP API (`POST /v1/database/{name}/call/{reducer_name}`) with all of the following: the pre-computed initial game state (board layout, snake starting states, initial items — the output of `generateBoardAndInitialState()`), the game seed (the root seed used by `generateBoardAndInitialState()`, forwarded for turn-resolution randomness and replay export per [04]), the dynamic gameplay parameters (the subset of the game configuration that affects runtime behaviour — food spawn rates, potion spawn rates, hazard damage, max health, timer budgets, max turns, etc.), the game-end notification callback URL (a Convex HTTP action endpoint for receiving game-end notifications per [04-REQ-061a]), the participating-teams snapshot ([05-REQ-029]) sufficient to populate the instance's connection authorization state per [03-REQ-039], and the game's unique identifier (for `aud` claim validation in `client_connected`). Client authentication uses OIDC-based JWT validation against the platform's public key (see [03] §3.17). A per-game **game-outcome callback token** — an RS256-signed JWT issued by Convex with `iss` = `CONVEX_SITE_URL`, `sub` = `stdb-instance:{gameId}`, `aud` = the game-end callback URL, and `exp` = 2 hours — is included in the `initialize_game` payload. The STDB module stores this token and presents it as a Bearer token when it POSTs the game-end notification (including the bundled replay data per [04-REQ-061]) back to Convex. The token is signed using the `SPACETIMEDB_SIGNING_KEY` RSA private key (or a dedicated callback-token key pair if operationally preferred). Convex validates incoming callbacks by verifying the JWT signature against its own key and checking the claims (`iss`, `sub`, `aud`, `exp`). *(See resolved 05-REVIEW-015.)*
+4. Invoke the instance's privileged initialization reducer (owned by [04]) via a Convex HTTP action calling SpacetimeDB's HTTP API (`POST /v1/database/{name}/call/{reducer_name}`) with all of the following: the pre-computed initial game state (board layout, snake starting states, initial items — the output of `generateBoardAndInitialState()`), the game seed (the root seed used by `generateBoardAndInitialState()`, forwarded for turn-resolution randomness and replay export per [04]), the `config.runtime` subtree of the game record — a `GameRuntimeConfig` carrying max health, max turns, hazard damage, spawn rates, and clock parameters ([01] §3.3, resolved [01-REVIEW-017]) — the game-end notification callback URL (a Convex HTTP action endpoint for receiving game-end notifications per [04-REQ-061a]), the participating-teams snapshot ([05-REQ-029]) sufficient to populate the instance's connection authorization state per [03-REQ-039], and the game's unique identifier (for `aud` claim validation in `client_connected`). Client authentication uses OIDC-based JWT validation against the platform's public key (see [03] §3.17). A per-game **game-outcome callback token** — an RS256-signed JWT issued by Convex with `iss` = `CONVEX_SITE_URL`, `sub` = `stdb-instance:{gameId}`, `aud` = the game-end callback URL, and `exp` = 2 hours — is included in the `initialize_game` payload. The STDB module stores this token and presents it as a Bearer token when it POSTs the game-end notification (including the bundled replay data per [04-REQ-061]) back to Convex. The token is signed using the `SPACETIMEDB_SIGNING_KEY` RSA private key (or a dedicated callback-token key pair if operationally preferred). Convex validates incoming callbacks by verifying the JWT signature against its own key and checking the claims (`iss`, `sub`, `aud`, `exp`). *(See resolved 05-REVIEW-015.)*
 5. Send game invitations to each participating Centaur Team's nominated server domain (per [03]). Each invitation must be accepted within **10 seconds**; if any server rejects the invitation or fails to respond within the timeout, the game-start orchestration fails and the game returns to `not-started` status with an error indicating which server(s) declined or timed out per [03-REQ-056]. *(See resolved 05-REVIEW-013.)*
 6. Upon acceptance by all servers, initialize Centaur subsystem state for each participating team by calling `initializeGameCentaurState()` from [06] for each team, update the game record with the instance URL, and transition the game's status to `playing`.
 
@@ -135,11 +141,11 @@ No STDB instance exists during config mode; the board preview is generated and p
 
 **05-REQ-032c**: When `generateBoardAndInitialState()` returns a `BoardGenerationFailure` (either during the preview mutation of [05-REQ-032b] or during game-start orchestration of [05-REQ-032] step 2), Convex shall surface the structured error reactively to the web client. The error shall identify which constraint failed on the final attempt (per [01-REQ-061]) so the administrative actor can modify the game configuration and re-attempt. This is the primary user-facing failure path for board-generation infeasibility — it occurs in Convex during config mode, before any STDB instance is provisioned.
 
-**05-REQ-032d**: The game-configuration parameter set ([05-REQ-023]) shall be understood as comprising two categories:
-- **Board generation parameters**: board dimensions, hazard %, fertile ground enabled/density/clustering, snake count per team. These are inputs to `generateBoardAndInitialState()` and are consumed entirely by Convex during board generation. They are not passed to the SpacetimeDB instance.
-- **Dynamic gameplay parameters**: food spawn rate, potion spawn rates (invulnerability, invisibility), hazard damage, max health, timer budgets (turn time, reserve time), max turns, and other parameters that affect runtime behaviour during gameplay. These are forwarded to the SpacetimeDB instance at init time alongside the pre-computed initial game state.
+**05-REQ-032d**: The game-configuration parameter set ([05-REQ-023]) is partitioned by the two subtrees of [01]'s `GameConfig`:
+- **`config.orchestration`** (`GameOrchestrationConfig` from [01] §3.3): board size, snakes per team, hazard percentage, and fertile-ground density/clustering. These are the inputs to `generateBoardAndInitialState()` and are consumed entirely by Convex during board generation. They are not passed to the SpacetimeDB instance.
+- **`config.runtime`** (`GameRuntimeConfig` from [01] §3.3): max health, max turns, hazard damage, food and potion spawn rates, and clock parameters. These are forwarded to the SpacetimeDB instance at init time alongside the pre-computed initial game state.
 
-The parameter split is a consequence of board generation moving to Convex (see [02] §2.14). Both categories are stored in each game's parameter set ([05-REQ-024]), but only dynamic gameplay parameters are included in the payload sent to STDB's `initialize_game` reducer.
+Both subtrees are stored in each game's `config` column ([05-REQ-024]); only `config.runtime` is included in the payload sent to STDB's `initialize_game` reducer. Platform-lifecycle fields (`skipStartConfirmation`, tournament meta-parameters, `scheduledStartTime`) live as top-level columns on the `games` row, outside `config`, because they are never forwarded to any runtime other than Convex's own scheduler.
 
 **05-REQ-033** *(negative)*: Convex shall not provision a SpacetimeDB game instance before a game record has been created for it, and shall not create a game record without intending to provision an instance for it. Unorphaned instance-less game records and game-less instances are both disallowed states.
 
@@ -266,36 +272,53 @@ Platform-wide tables are defined using Convex's `defineSchema`/`defineTable`/`v.
 
 ```typescript
 import { defineSchema, defineTable } from "convex/server"
-import { v } from "convex/values"
+import { v, type Infer } from "convex/values"
+
+// The validator below is a 1:1 mirror of [01]'s GameConfig type (see [01] §3.3
+// and resolved [01-REVIEW-017]). Every field name, nesting level, and unit
+// matches the canonical TypeScript declaration in Module 01. A compile-time
+// assertion at the bottom of this block turns any drift into a build error.
+
+const boardSizeV = v.union(
+  v.literal("small"), v.literal("medium"),
+  v.literal("large"), v.literal("giant"),
+)
+
+const gameOrchestrationConfigV = v.object({
+  boardSize: boardSizeV,
+  snakesPerTeam: v.number(),
+  hazardPercentage: v.number(),
+  fertileGround: v.object({
+    density: v.number(),     // 0 = disabled (per [01-REQ-069])
+    clustering: v.number(),
+  }),
+})
+
+const gameRuntimeConfigV = v.object({
+  maxHealth: v.number(),
+  maxTurns: v.number(),       // 0 = unlimited (per [01-REQ-058] / [01-REQ-066])
+  hazardDamage: v.number(),
+  food:          v.object({ spawnRate: v.number() }),
+  invulnPotions: v.object({ spawnRate: v.number() }),   // 0 = disabled (per [01-REQ-072])
+  invisPotions:  v.object({ spawnRate: v.number() }),   // 0 = disabled (per [01-REQ-073])
+  clock: v.object({
+    initialBudgetMs:   v.number(),
+    budgetIncrementMs: v.number(),
+    firstTurnTimeMs:   v.number(),
+    maxTurnTimeMs:     v.number(),
+  }),
+})
 
 const gameConfigValidator = v.object({
-  boardSize: v.union(
-    v.literal("small"), v.literal("medium"),
-    v.literal("large"), v.literal("giant")
-  ),
-  maxTurnTimeSec: v.number(),
-  firstTurnTimeSec: v.number(),
-  initialTimeBudgetSec: v.number(),
-  budgetIncrementMs: v.number(),
-  snakesPerTeam: v.number(),
-  maxTurns: v.union(v.number(), v.null()),
-  maxHealth: v.number(),
-  hazardPercent: v.number(),
-  hazardDamage: v.number(),
-  foodSpawnRate: v.number(),
-  fertileGround: v.boolean(),
-  fertileDensity: v.number(),
-  fertileClustering: v.number(),
-  invulnPotions: v.boolean(),
-  invulnPotionSpawnRate: v.number(),
-  invisPotions: v.boolean(),
-  invisPotionSpawnRate: v.number(),
-  skipStartConfirmation: v.boolean(),
-  tournamentMode: v.boolean(),
-  tournamentRounds: v.union(v.number(), v.null()),
-  tournamentInterludeSec: v.union(v.number(), v.null()),
-  scheduledStartTime: v.union(v.number(), v.null()),
+  orchestration: gameOrchestrationConfigV,
+  runtime:       gameRuntimeConfigV,
 })
+
+// Compile-time drift guard. If [01].GameConfig and this validator disagree on
+// any field name, nesting level, or type, this alias fails to resolve and the
+// build breaks — no runtime check is required.
+type _GameConfigMirrorCheck =
+  AssertEqual<Infer<typeof gameConfigValidator>, import("@snek-centaur/engine").GameConfig>
 
 export default defineSchema({
   users: defineTable({
@@ -343,7 +366,18 @@ export default defineSchema({
 
   games: defineTable({
     roomId: v.id("rooms"),
+    // `config` is the canonical [01].GameConfig shape, mirrored 1:1 by
+    // `gameConfigValidator` above (see resolved [01-REVIEW-017]). Platform-only
+    // lifecycle fields that Convex persists between games but never forwards
+    // to the engine (`skipStartConfirmation`, tournament meta-parameters,
+    // `scheduledStartTime`) live at the top level of this row, outside
+    // `config`, because they are not part of the tri-runtime-mirrored type.
     config: gameConfigValidator,
+    skipStartConfirmation: v.boolean(),
+    tournamentMode: v.boolean(),
+    tournamentRounds: v.union(v.number(), v.null()),
+    tournamentInterludeSec: v.union(v.number(), v.null()),
+    scheduledStartTime: v.union(v.number(), v.null()),
     status: v.union(
       v.literal("not-started"), v.literal("playing"), v.literal("finished")
     ),
@@ -473,24 +507,32 @@ Satisfies 05-REQ-022, 05-REQ-023, 05-REQ-024, 05-REQ-025, 05-REQ-026, 05-REQ-032
 
 **Config-on-game model** *(see resolved 05-REVIEW-008)*. Game configuration lives exclusively on the game object. The room is a dumb container for a succession of games with exactly one live (not-started or playing) game at a time. When a room is created, an initial not-started game is created with default config values per 05-REQ-023. When a game finishes, auto-create copies the finished game's config into a fresh not-started game.
 
-**Config editing**: While a game is in `not-started` status, its config is editable by the room's administrative actor (owner, or any authenticated user if no owner). A Convex mutation `updateGameConfig` accepts a partial config object and merges it into the game's config, validating each field against the ranges defined in 05-REQ-023:
+**Config editing**: While a game is in `not-started` status, the `config` column and the platform-lifecycle fields (`skipStartConfirmation`, `tournamentMode`, `tournamentRounds`, `tournamentInterludeSec`, `scheduledStartTime`) are editable by the room's administrative actor (owner, or any authenticated user if no owner). A Convex mutation `updateGameConfig` accepts a deep-partial of the config and a partial of the lifecycle fields, merges each into the game record, and validates against the ranges defined in 05-REQ-023:
 
 ```typescript
 mutation updateGameConfig(args: {
   gameId: Id<"games">
-  updates: Partial<GameConfig>
+  config?: DeepPartial<GameConfig>               // mirrored [01].GameConfig
+  lifecycle?: Partial<{
+    skipStartConfirmation: boolean
+    tournamentMode: boolean
+    tournamentRounds: number | null
+    tournamentInterludeSec: number | null
+    scheduledStartTime: number | null
+  }>
 }): void
 ```
 
-The mutation rejects updates if the game's status is not `not-started`. Conditional validation per 05-REQ-025: dependent parameters (e.g., `fertileDensity` when `fertileGround` is off) are persisted but not validated against their range constraints until the gating parameter is on.
+The mutation rejects updates if the game's status is not `not-started`. Conditional validation per 05-REQ-025: values in `config.orchestration.fertileGround.clustering` are always accepted within their range and simply ignored during board generation when `config.orchestration.fertileGround.density` is 0; tournament-dependent lifecycle fields may be persisted while `tournamentMode` is false and are ignored by the orchestration.
 
-**Config freeze**: When game-start orchestration begins (05-REQ-032 step 1), the config becomes immutable. The mutation that initiates game start reads the config and proceeds with it; no further `updateGameConfig` calls succeed because the game transitions away from `not-started`.
+**Config freeze**: When game-start orchestration begins (05-REQ-032 step 1), the config and lifecycle fields become immutable. The mutation that initiates game start reads the record and proceeds with it; no further `updateGameConfig` calls succeed because the game transitions away from `not-started`.
 
-**Parameter split** (05-REQ-032d). At game-start time, the config is split into:
-- **Board generation parameters** consumed by `generateBoardAndInitialState()`: `boardSize`, `hazardPercent`, `fertileGround`, `fertileDensity`, `fertileClustering`, `snakesPerTeam`.
-- **Dynamic gameplay parameters** forwarded to STDB's `initialize_game`: `snakesPerTeam`, `maxHealth`, `maxTurns`, `hazardDamage`, `foodSpawnRate`, `invulnPotions`, `invulnPotionSpawnRate`, `invisPotions`, `invisPotionSpawnRate`, `initialTimeBudgetSec`, `budgetIncrementMs`, `firstTurnTimeSec`, `maxTurnTimeSec`. Note `snakesPerTeam` appears in both categories (needed for initial snake placement and for runtime configuration).
+**Parameter split at STDB handoff** (05-REQ-032d). At game-start time:
+- `config.orchestration` (`boardSize`, `snakesPerTeam`, `hazardPercentage`, `fertileGround.{density, clustering}`) is consumed by `generateBoardAndInitialState()` inside a Convex mutation.
+- `config.runtime` (max health, max turns, hazard damage, `food.spawnRate`, `invulnPotions.spawnRate`, `invisPotions.spawnRate`, `clock.*`) is forwarded verbatim to STDB's `initialize_game` reducer as `gameRuntimeConfig`.
+- Platform-lifecycle fields are consumed by the Convex orchestration itself and not forwarded to any other runtime.
 
-The mapping from `GameConfig` field names to `DynamicGameplayParams` field names (Module 04 §3.1) is a straightforward field-by-field translation performed in the game-start action.
+Because `config.runtime` on the Convex row mirrors `GameRuntimeConfig` in Module 01 field-for-field (enforced by the `AssertEqual<Infer<typeof gameRuntimeConfigV>, GameRuntimeConfig>` check in §2.1), no field-by-field translation is needed at the STDB handoff — the subtree is serialized as-is.
 
 ---
 
@@ -518,13 +560,13 @@ action startGame(args: { gameId: Id<"games"> }): void
 
 **Step 1 — Config freeze**. The action reads the game's config. From this point, the config is treated as frozen (the game record is about to leave `not-started` status, preventing further edits).
 
-**Step 2 — Board generation**. If `lockedBoardPreview` is non-null on the game record, use it directly. Otherwise, invoke `generateBoardAndInitialState()` from the shared engine codebase within a Convex mutation. The mutation generates a cryptographic root seed via `crypto.getRandomValues(new Uint8Array(32))`, constructs the `GameConfig` (Module 01 §3.3) from the platform config fields, and calls the function. If all bounded-retry attempts fail ([01-REQ-061]), the mutation throws a `BoardGenerationFailure` error and the action aborts, returning the game to `not-started` with the error surfaced reactively.
+**Step 2 — Board generation**. If `lockedBoardPreview` is non-null on the game record, use it directly. Otherwise, invoke `generateBoardAndInitialState()` from the shared engine codebase within a Convex mutation. The mutation generates a cryptographic root seed via `crypto.getRandomValues(new Uint8Array(32))` and calls the function with `config.orchestration` (Module 01 §3.3). If all bounded-retry attempts fail ([01-REQ-061]), the mutation throws a `BoardGenerationFailure` error and the action aborts, returning the game to `not-started` with the error surfaced reactively.
 
 **Step 3 — Healthcheck**. For non-tournament games: the action calls each enrolled team's healthcheck endpoint (`GET https://{nominatedServerDomain}/.well-known/snek-healthcheck`). If any team's server is unhealthy, the action aborts: a mutation writes the healthcheck failures to the game record's `healthcheckFailures` field and the game remains in `not-started`. For tournament games: healthcheck is skipped per 05-REQ-036(b).
 
 **Step 4 — STDB provisioning**. The action retrieves the active WASM binary from Convex file storage (`wasm_modules` table where `active === true`), then calls `POST /v1/database` on the self-hosted SpacetimeDB management API with the binary, authenticated via a Convex self-issued management JWT per [03] §3.22. The response provides the instance URL and module name.
 
-**Step 5 — Instance initialization**. The action calls `POST /v1/database/{name}/call/initialize_game` on the STDB instance with an `InitializeGameParams` payload (Module 04 §3.1). The payload includes: pre-computed initial state (board, snakes, items), the game seed (`boardSeed`), dynamic gameplay parameters, the game-end callback URL (a Convex HTTP action endpoint), a game-outcome callback token (an RS256-signed JWT with `iss: CONVEX_SITE_URL`, `sub: "stdb-instance:{gameId}"`, `aud: callbackUrl`, `exp: iat + 7200`), the participating-teams roster, and the game's Convex document `_id` as the gameId. The callback token is not stored by Convex — the STDB module stores it and presents it back to Convex on game-end; Convex validates it by signature verification and claims checking. *(See resolved 05-REVIEW-015.)*
+**Step 5 — Instance initialization**. The action calls `POST /v1/database/{name}/call/initialize_game` on the STDB instance with an `InitializeGameParams` payload (Module 04 §3.1). The payload includes: pre-computed initial state (board, snakes, items), the game seed (`boardSeed`), `config.runtime` (the `GameRuntimeConfig` from [01] §3.3, passed as `gameRuntimeConfig`), the game-end callback URL (a Convex HTTP action endpoint), a game-outcome callback token (an RS256-signed JWT with `iss: CONVEX_SITE_URL`, `sub: "stdb-instance:{gameId}"`, `aud: callbackUrl`, `exp: iat + 7200`), the participating-teams roster, and the game's Convex document `_id` as the gameId. The callback token is not stored by Convex — the STDB module stores it and presents it back to Convex on game-end; Convex validates it by signature verification and claims checking. *(See resolved 05-REVIEW-015.)*
 
 **Step 6 — Game credential issuance and invitations**. For each participating team, the action calls `issueGameCredential(centaurTeamId, gameId)` from [03] to generate a per-team game credential JWT. The action then sends game invitations via `POST https://{nominatedServerDomain}/.well-known/snek-game-invite` with a `GameInvitationPayload` (Module 03 §4.7) containing the credential, STDB URL, module name, game config, and team roster. Each invitation must be accepted within 10 seconds. If any server rejects or times out, the action tears down the STDB instance and returns the game to `not-started` with an invitation failure error.
 
@@ -864,7 +906,7 @@ Satisfies 05-REQ-059, 05-REQ-060, 05-REQ-061, 05-REQ-062, 05-REQ-063, 05-REQ-064
 
 **Tournament creation**: When a game with `tournamentMode === true` is started, the game-start orchestration creates a `tournaments` record before proceeding with round 1:
 
-1. Create a tournament record with: `roomId`, `totalRounds` (from config), `interludeSeconds` (from config), `scheduledStartTime` (from config), `currentRound: 1`, `status: "scheduled"`, `enrolledTeamIds` (snapshot of room's enrolled teams), and `baseConfig` (the game's config with `tournamentMode` set to `false` and tournament meta-parameters nulled). The tournament transitions from `"scheduled"` to `"in_progress"` at the moment the first round's game-start orchestration begins (i.e., when round 1 transitions to `playing`). This is the point at which the tournament-wide roster freeze (Section 2.15) takes effect.
+1. Create a tournament record with: `roomId`, `totalRounds` (from the game's top-level `tournamentRounds`), `interludeSeconds` (from the game's top-level `tournamentInterludeSec`), `scheduledStartTime` (from the game's top-level `scheduledStartTime`), `currentRound: 1`, `status: "scheduled"`, `enrolledTeamIds` (snapshot of room's enrolled teams), and `baseConfig` (the game's `config` subtree — a `[01].GameConfig` — which contains only game-rules parameters and so inherently excludes the tournament meta-parameters, since those live at the top level of the `games` row outside `config`). The tournament transitions from `"scheduled"` to `"in_progress"` at the moment the first round's game-start orchestration begins (i.e., when round 1 transitions to `playing`). This is the point at which the tournament-wide roster freeze (Section 2.15) takes effect.
 2. Set the game's `tournamentId` and `tournamentRound: 1`.
 3. If `scheduledStartTime` is in the future, schedule the game-start action to run at that time via `ctx.scheduler.runAt(scheduledStartTime, ...)`. The game remains in `not-started` until then.
 4. If `scheduledStartTime` is now or in the past, proceed with immediate game-start.
@@ -876,7 +918,7 @@ Satisfies 05-REQ-059, 05-REQ-060, 05-REQ-061, 05-REQ-062, 05-REQ-063, 05-REQ-064
 
 **Tournament-wide roster freeze** *(see resolved 05-REVIEW-003)*: The roster freeze check in team mutation functions (Section 2.16) checks whether the team is enrolled in any tournament with `status === "in_progress"`. Rosters remain frozen during inter-round interludes.
 
-**Config inheritance** (05-REQ-062): Each round-game's config is the tournament's `baseConfig`, which excludes tournament meta-parameters. All rounds share the same gameplay configuration.
+**Config inheritance** (05-REQ-062): Each round-game's `config` column is a copy of the tournament's `baseConfig` (a `[01].GameConfig`). Round games inherit `tournamentMode = true`, `tournamentId` set to the tournament record, and `tournamentRound` incremented; other lifecycle fields (`skipStartConfirmation`, `scheduledStartTime` etc.) are set by the chaining action. All rounds share the same gameplay configuration.
 
 ---
 
@@ -1120,26 +1162,14 @@ not-started ──[start orchestration succeeds]──► playing ──[game-en
 
 Motivated by 05-REQ-022, 05-REQ-023. Consumed by [08] for config editing UI and by [07] transitively.
 
+The canonical `GameConfig` type (with `GameOrchestrationConfig` and `GameRuntimeConfig` children) is owned by [01] §3.3 and re-exported via [02]. Module 05 does not declare a competing interface; the `gameConfigValidator` in §2.1 is a `v.*` mirror of `[01].GameConfig` whose `Infer<>` type equals it exactly (enforced by the `AssertEqual` check in §2.1). Platform-lifecycle fields — `skipStartConfirmation`, `tournamentMode`, `tournamentRounds`, `tournamentInterludeSec`, `scheduledStartTime` — live as top-level columns on the `games` table alongside `config` and are exported here as a separate `GameLifecycleFields` shape for [08] and API consumers:
+
 ```typescript
-interface GameConfig {
-  readonly boardSize: "small" | "medium" | "large" | "giant"
-  readonly maxTurnTimeSec: number
-  readonly firstTurnTimeSec: number
-  readonly initialTimeBudgetSec: number
-  readonly budgetIncrementMs: number
-  readonly snakesPerTeam: number
-  readonly maxTurns: number | null
-  readonly maxHealth: number
-  readonly hazardPercent: number
-  readonly hazardDamage: number
-  readonly foodSpawnRate: number
-  readonly fertileGround: boolean
-  readonly fertileDensity: number
-  readonly fertileClustering: number
-  readonly invulnPotions: boolean
-  readonly invulnPotionSpawnRate: number
-  readonly invisPotions: boolean
-  readonly invisPotionSpawnRate: number
+import type { GameConfig } from "[01]"  // canonical; see [01] §3.3
+
+export type { GameConfig }  // re-exported for convenience
+
+export interface GameLifecycleFields {
   readonly skipStartConfirmation: boolean
   readonly tournamentMode: boolean
   readonly tournamentRounds: number | null
@@ -1148,7 +1178,7 @@ interface GameConfig {
 }
 ```
 
-The field names in `GameConfig` correspond to the parameter table in 05-REQ-023. The mapping to Module 01's `GameConfig` (§3.3) and Module 04's `DynamicGameplayParams` (§3.1) is a straightforward field-by-field translation performed by the game-start orchestration action.
+See resolved [01-REVIEW-017] for the design rationale behind the split. [08]'s config editor renders flat controls over the nested `GameConfig` shape via a view-model transform; unit conversion (ms↔seconds) lives in that transform, not in the contract.
 
 ### 3.4 Access Token Issuance Endpoint Contract
 
