@@ -194,9 +194,9 @@ Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disrupti
 
 **01-REQ-047 (Phase 6 — Potion Collection)**: For each surviving snake whose head occupies a potion cell after Phase 2 movement, the potion is consumed. Phase 6 then aggregates by team and by potion family: for each team T and each family F such that at least one member of T consumed a potion of family F this turn, schedule the single team rebuild specified in 01-REQ-026 (for invulnerability) or 01-REQ-027 (for invisibility). The rebuild is recorded as per-member `pendingEffects` entries with a "replace on apply" marker at the family level, meaning Phase 9 (01-REQ-050) will remove any prior active or pending entry of the same family on each affected member before inserting the new one. Simultaneous multi-collection by the same team of the same family is collapsed into a single coherent rebuild: every collector-of-this-turn gets `state = debuff`, every non-collector alive teammate gets `state = buff`, and all affected members receive the same `expiryTurn = currentTurn + 3`. Potion collection is not a disruption (01-REQ-030).
 
-**01-REQ-048 (Phase 7 — Food Spawning)**: Food shall spawn each turn. The expected count is the configured `food.spawnRate` (a non-negative decimal; 0 means no food ever spawns). The guaranteed count is `floor(food.spawnRate)` items, with probability `food.spawnRate mod 1` of one additional item. Spawn locations are chosen randomly using the turn seed from eligible cells: inner, non-Wall, non-Hazard, and not currently occupied by a snake, food, or potion. When `fertileGroundEnabled(board)` is true (Section 3.2), eligible cells are further restricted to Fertile cells.
+**01-REQ-048 (Phase 7 — Food Spawning)**: Food shall spawn each turn. The expected count is the configured `foodSpawnRate` (a non-negative decimal; 0 means no food ever spawns). The guaranteed count is `floor(foodSpawnRate)` items, with probability `foodSpawnRate mod 1` of one additional item. Spawn locations are chosen randomly using the turn seed from eligible cells: inner, non-Wall, non-Hazard, and not currently occupied by a snake, food, or potion. When `fertileGroundEnabled(board)` is true (Section 3.2), eligible cells are further restricted to Fertile cells.
 
-**01-REQ-049 (Phase 8 — Potion Spawning)**: InvulnPotions shall spawn each turn using `invulnPotions.spawnRate` by the same probabilistic mechanism and eligible-cell criteria as food; a spawn rate of 0 results in no invulnerability potions spawning. InvisPotions shall spawn independently each turn using `invisPotions.spawnRate` by the same mechanism; a spawn rate of 0 results in no invisibility potions spawning.
+**01-REQ-049 (Phase 8 — Potion Spawning)**: InvulnPotions shall spawn each turn using `invulnPotionSpawnRate` by the same probabilistic mechanism and eligible-cell criteria as food; a spawn rate of 0 results in no invulnerability potions spawning. InvisPotions shall spawn independently each turn using `invisPotionSpawnRate` by the same mechanism; a spawn rate of 0 results in no invisibility potions spawning.
 
 **01-REQ-050 (Phase 9 — Effect Application and Expiry)**: All pending effect cancellations and new effect additions scheduled during Phases 4–6 shall be applied in the following order: (a) cancellations scheduled under 01-REQ-031 remove all active effects of the cancelled families on every alive team member; (b) pending team rebuilds scheduled under 01-REQ-047 are applied with replace-semantics — for each affected `(snake, family)` pair, any remaining active effect of that family on that snake is removed and the rebuild's pending entry becomes active; (c) all active effects whose expiry condition has been reached (`currentTurn >= expiryTurn`) are removed. The per-family single-effect invariant of 01-REQ-028 holds at the end of Phase 9. `invulnerabilityLevel` and `visible` are derived values per 01-REQ-022/023 and require no separate recomputation step.
 
@@ -250,11 +250,11 @@ Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disrupti
 
 **01-REQ-070 (Fertile ground clustering range)**: `fertileGround.clustering` shall be an integer in the range 1–20, default 10 (informal spec §9.3). Has no effect when `fertileGround.density` is 0.
 
-**01-REQ-071 (Food spawn rate range)**: `food.spawnRate` shall be a number in the range 0–5, default 0.5 (informal spec §9.3).
+**01-REQ-071 (Food spawn rate range)**: `foodSpawnRate` shall be a number in the range 0–5, default 0.5 (informal spec §9.3).
 
-**01-REQ-072 (Invulnerability potion spawn rate range)**: `invulnPotions.spawnRate` shall be a number in the range 0–0.2, default 0.15 (informal spec §9.3). A value of 0 disables invulnerability potions (none ever spawn); any positive value within [0.01, 0.2] yields the standard probabilistic spawn mechanic of 01-REQ-049. Values in `(0, 0.01)` are permitted by the type but operationally indistinguishable from a very rare rate. See resolved **01-REVIEW-017**.
+**01-REQ-072 (Invulnerability potion spawn rate range)**: `invulnPotionSpawnRate` shall be a number in the range 0–0.2, default 0.15 (informal spec §9.3). A value of 0 disables invulnerability potions (none ever spawn); any positive value within [0.01, 0.2] yields the standard probabilistic spawn mechanic of 01-REQ-049. Values in `(0, 0.01)` are permitted by the type but operationally indistinguishable from a very rare rate. See resolved **01-REVIEW-017**.
 
-**01-REQ-073 (Invisibility potion spawn rate range)**: `invisPotions.spawnRate` shall be a number in the range 0–0.2, default 0.1 (informal spec §9.3). A value of 0 disables invisibility potions (none ever spawn); any positive value within [0.01, 0.2] yields the standard probabilistic spawn mechanic of 01-REQ-049. See resolved **01-REVIEW-017**.
+**01-REQ-073 (Invisibility potion spawn rate range)**: `invisPotionSpawnRate` shall be a number in the range 0–0.2, default 0.1 (informal spec §9.3). A value of 0 disables invisibility potions (none ever spawn); any positive value within [0.01, 0.2] yields the standard probabilistic spawn mechanic of 01-REQ-049. See resolved **01-REVIEW-017**.
 
 **01-REQ-074 (Initial time budget range)**: `clock.initialBudgetMs` shall be an integer in the range 0–600000 (0–10 minutes), default 60000 (informal spec §9.3). Zero means no initial budget.
 
@@ -748,15 +748,15 @@ function resolveTurn(state, T, turnSeed):
   # predicate is a pure function of the board and may be cached at init time
   # since the board never changes post-generation.
   rngP7 = rngFromSeed(subSeed(turnSeed, "phase-7-food"))
-  spawnItems(state, ItemType.Food, config.food.spawnRate, rngP7, eligibleFoodCells(state))
+  spawnItems(state, ItemType.Food, config.foodSpawnRate, rngP7, eligibleFoodCells(state))
 
   # ---------- Phase 8: Potion Spawning (01-REQ-049) ----------
   # spawnRate == 0 is the disabled sentinel; spawnItems with expected count 0
   # is a no-op, so no explicit branch is needed.
   rngP8 = rngFromSeed(subSeed(turnSeed, "phase-8-potions"))
-  spawnItems(state, ItemType.InvulnPotion, config.invulnPotions.spawnRate,
+  spawnItems(state, ItemType.InvulnPotion, config.invulnPotionSpawnRate,
              rngP8, eligiblePotionCells(state))
-  spawnItems(state, ItemType.InvisPotion, config.invisPotions.spawnRate,
+  spawnItems(state, ItemType.InvisPotion, config.invisPotionSpawnRate,
              rngP8, eligiblePotionCells(state))
 
   # ---------- Phase 9: Effect Application and Expiry (01-REQ-050) ----------
@@ -1086,17 +1086,11 @@ export interface GameRuntimeConfig {
   readonly maxHealth: number                     // 1–500, default 100, 01-REQ-065
   readonly maxTurns: number                      // 0 (disabled) or 1–1000, default 100, 01-REQ-058, 01-REQ-066
   readonly hazardDamage: number                  // 1–100, default 15, 01-REQ-046b, 01-REQ-068
-  readonly food: {
-    readonly spawnRate: number                   // 0–5, default 0.5, 01-REQ-048, 01-REQ-071
-  }
-  readonly invulnPotions: {
-    readonly spawnRate: number                   // 0–0.2, default 0.15, 01-REQ-049, 01-REQ-072
+  readonly foodSpawnRate: number                 // 0–5, default 0.5, 01-REQ-048, 01-REQ-071
+  readonly invulnPotionSpawnRate: number         // 0–0.2, default 0.15, 01-REQ-049, 01-REQ-072
                                                  //   (0 = no invuln potions ever spawn)
-  }
-  readonly invisPotions: {
-    readonly spawnRate: number                   // 0–0.2, default 0.1, 01-REQ-049, 01-REQ-073
+  readonly invisPotionSpawnRate: number          // 0–0.2, default 0.1, 01-REQ-049, 01-REQ-073
                                                  //   (0 = no invis potions ever spawn)
-  }
   readonly clock: {
     readonly initialBudgetMs: number             // 0–600000, default 60000, 01-REQ-035, 01-REQ-074
     readonly budgetIncrementMs: number           // 100–5000, default 500, 01-REQ-036, 01-REQ-075
@@ -1111,7 +1105,7 @@ export interface GameConfig {
 }
 ```
 
-**Schema-mirroring constraints**. The three types above are the canonical TypeScript schema. To make the same shape declarable in both SpacetimeDB (`@type` classes mirroring each interface) and Convex (`v.object({…})` validators with `Infer<typeof v> ≡ GameConfig`) without translation, the following constraints hold throughout: every numeric field is `number` (no `bigint`/`Int64`); no field is `null` or absent in value position (sentinels — `maxTurns: 0`, `density: 0`, `spawnRate: 0` — encode "disabled"); enums are string-literal unions (`BoardSize`); time values are milliseconds; nested object grouping carries semantic meaning rather than syntactic optionality. See resolved **01-REVIEW-017**.
+**Schema-mirroring constraints**. The three types above are the canonical TypeScript schema. To make the same shape declarable in both SpacetimeDB (`@type` classes mirroring each interface) and Convex (`v.object({…})` validators with `Infer<typeof v> ≡ GameConfig`) without translation, the following constraints hold throughout: every numeric field is `number` (no `bigint`/`Int64`); no field is `null` or absent in value position (sentinels — `maxTurns: 0`, `fertileGround.density: 0`, `foodSpawnRate: 0`, `invulnPotionSpawnRate: 0`, `invisPotionSpawnRate: 0` — encode "disabled"); enums are string-literal unions (`BoardSize`); time values are milliseconds; nested object grouping carries semantic meaning rather than syntactic optionality (e.g., `fertileGround` bundles the two board-gen knobs that parameterise one feature; `clock` bundles the four chess-timer knobs). See resolved **01-REVIEW-017**.
 
 ### 3.4 Game Outcome
 
@@ -1666,7 +1660,7 @@ Option A was rejected because it retains the exact asymmetry and reducer problem
 - **01-REQ-049** rewritten: potion spawning always runs; spawn-rate 0 is the disabled sentinel.
 - **01-REQ-069** expanded: `fertileGround.density` range widens to `0–90` with `0` as the explicit disabled sentinel.
 - **01-REQ-070** loses the "only meaningful when enabled is true" qualifier; clustering has no effect when density is 0.
-- **01-REQ-072** and **01-REQ-073**: `spawnRate` range widens to `0–0.2` with `0` as the explicit disabled sentinel; operational range `[0.01, 0.2]` retained as guidance for non-zero values.
+- **01-REQ-072** and **01-REQ-073**: the potion spawn-rate fields (now flat as `invulnPotionSpawnRate` and `invisPotionSpawnRate`) widen to `0–0.2` with `0` as the explicit disabled sentinel; operational range `[0.01, 0.2]` retained as guidance for non-zero values. The previous single-field nested groupings `food: {spawnRate}`, `invulnPotions: {spawnRate}`, `invisPotions: {spawnRate}` were flattened to `foodSpawnRate`, `invulnPotionSpawnRate`, `invisPotionSpawnRate` because the grouping carried no fields beyond the rate itself once the `enabled` flag was removed; single-field wrappers add syntactic noise without semantic grouping value. Nesting is retained where the group carries more than one field (`fertileGround: {density, clustering}`, `clock: {initialBudgetMs, budgetIncrementMs, firstTurnTimeMs, maxTurnTimeMs}`).
 - **Section 2.4 Stage 2 and Stage 6** pseudocode: `config.fertileGround.enabled` replaced by `config.fertileGround.density > 0`.
 - **Section 2.8 Phase 8** pseudocode: `if config.<potion>.enabled` gating removed; `spawnItems` is called unconditionally since `spawnRate: 0` is a no-op.
 - **Section 2.10 turn-0 simultaneous-elimination branch**: `3 * snakesPerTeam` replaced by `3 * initialSnakeCount(t)`.

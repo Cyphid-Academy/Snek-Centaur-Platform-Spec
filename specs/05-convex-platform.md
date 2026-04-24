@@ -80,9 +80,9 @@ Game-rules parameters (`config` subtrees):
 | `config.runtime.maxHealth` | Integer | 100 | 1–500 | Starting and restored health |
 | `config.runtime.maxTurns` | Integer | 100 | 0 or 1–1000 | `0` = unlimited ([01-REQ-058] / [01-REQ-066]) |
 | `config.runtime.hazardDamage` | Integer | 15 | 1–100 | Health lost per turn on a hazard cell |
-| `config.runtime.food.spawnRate` | Decimal | 0.5 | 0–5 | Expected food per turn |
-| `config.runtime.invulnPotions.spawnRate` | Decimal | 0.15 | 0–0.2 | `0` disables ([01-REQ-072]) |
-| `config.runtime.invisPotions.spawnRate` | Decimal | 0.1 | 0–0.2 | `0` disables ([01-REQ-073]) |
+| `config.runtime.foodSpawnRate` | Decimal | 0.5 | 0–5 | Expected food per turn |
+| `config.runtime.invulnPotionSpawnRate` | Decimal | 0.15 | 0–0.2 | `0` disables ([01-REQ-072]) |
+| `config.runtime.invisPotionSpawnRate` | Decimal | 0.1 | 0–0.2 | `0` disables ([01-REQ-073]) |
 | `config.runtime.clock.initialBudgetMs` | Milliseconds | 60000 | 0–600000 | Starting chess-timer budget per Centaur Team |
 | `config.runtime.clock.budgetIncrementMs` | Milliseconds | 500 | 100–5000 | Added to each Centaur Team's budget each turn |
 | `config.runtime.clock.firstTurnTimeMs` | Milliseconds | 60000 | 1000–300000 | Applies to turn 0 only |
@@ -102,7 +102,7 @@ Units inside `config` are milliseconds throughout, consistent with [01]'s canoni
 
 **05-REQ-024**: Convex shall associate a game-configuration parameter set with every game. The parameter set is editable while the game is in `not-started` status. When the game transitions to `playing`, the parameter set is frozen as an immutable snapshot for the remainder of the game's lifetime. *(See resolved 05-REVIEW-008.)*
 
-**05-REQ-025**: Parameters whose meaning is conditional on another parameter shall be validated consistently with that condition. Within `config` (the mirrored [01].GameConfig) the "disabled" state of a feature is encoded by a zero sentinel on the dependent numeric field itself — `fertileGround.density = 0`, `invulnPotions.spawnRate = 0`, `invisPotions.spawnRate = 0`, or `maxTurns = 0` — so no separate gating flag needs to be validated against a dependent. `fertileGround.clustering` has no effect when `fertileGround.density` is 0; Convex shall persist any in-range clustering value regardless and the value shall simply be ignored during board generation. Platform-lifecycle fields that do carry a boolean gate (`tournamentMode`) follow the prior rule: when the gate is off, dependent fields (`tournamentRounds`, `tournamentInterludeSec`, `scheduledStartTime`) may be persisted but shall not be acted on by the orchestration. See resolved [01-REVIEW-017].
+**05-REQ-025**: Parameters whose meaning is conditional on another parameter shall be validated consistently with that condition. Within `config` (the mirrored [01].GameConfig) the "disabled" state of a feature is encoded by a zero sentinel on the dependent numeric field itself — `fertileGround.density = 0`, `foodSpawnRate = 0`, `invulnPotionSpawnRate = 0`, `invisPotionSpawnRate = 0`, or `maxTurns = 0` — so no separate gating flag needs to be validated against a dependent. `fertileGround.clustering` has no effect when `fertileGround.density` is 0; Convex shall persist any in-range clustering value regardless and the value shall simply be ignored during board generation. Platform-lifecycle fields that do carry a boolean gate (`tournamentMode`) follow the prior rule: when the gate is off, dependent fields (`tournamentRounds`, `tournamentInterludeSec`, `scheduledStartTime`) may be persisted but shall not be acted on by the orchestration. See resolved [01-REVIEW-017].
 
 **05-REQ-026** *(negative)*: The game-configuration parameter set shall not include any parameter that configures bot behaviour, heuristic defaults, or Drive management. Such parameters are owned by [06] and by the Snek Centaur Server web application per [02-REQ-045] through [02-REQ-047].
 
@@ -298,9 +298,9 @@ const gameRuntimeConfigV = v.object({
   maxHealth: v.number(),
   maxTurns: v.number(),       // 0 = unlimited (per [01-REQ-058] / [01-REQ-066])
   hazardDamage: v.number(),
-  food:          v.object({ spawnRate: v.number() }),
-  invulnPotions: v.object({ spawnRate: v.number() }),   // 0 = disabled (per [01-REQ-072])
-  invisPotions:  v.object({ spawnRate: v.number() }),   // 0 = disabled (per [01-REQ-073])
+  foodSpawnRate:         v.number(),                    // 0 = disabled (per [01-REQ-071])
+  invulnPotionSpawnRate: v.number(),                    // 0 = disabled (per [01-REQ-072])
+  invisPotionSpawnRate:  v.number(),                    // 0 = disabled (per [01-REQ-073])
   clock: v.object({
     initialBudgetMs:   v.number(),
     budgetIncrementMs: v.number(),
@@ -529,7 +529,7 @@ The mutation rejects updates if the game's status is not `not-started`. Conditio
 
 **Parameter split at STDB handoff** (05-REQ-032d). At game-start time:
 - `config.orchestration` (`boardSize`, `snakesPerTeam`, `hazardPercentage`, `fertileGround.{density, clustering}`) is consumed by `generateBoardAndInitialState()` inside a Convex mutation.
-- `config.runtime` (max health, max turns, hazard damage, `food.spawnRate`, `invulnPotions.spawnRate`, `invisPotions.spawnRate`, `clock.*`) is forwarded verbatim to STDB's `initialize_game` reducer as `gameRuntimeConfig`.
+- `config.runtime` (`maxHealth`, `maxTurns`, `hazardDamage`, `foodSpawnRate`, `invulnPotionSpawnRate`, `invisPotionSpawnRate`, `clock.*`) is forwarded verbatim to STDB's `initialize_game` reducer as `gameRuntimeConfig`.
 - Platform-lifecycle fields are consumed by the Convex orchestration itself and not forwarded to any other runtime.
 
 Because `config.runtime` on the Convex row mirrors `GameRuntimeConfig` in Module 01 field-for-field (enforced by the `AssertEqual<Infer<typeof gameRuntimeConfigV>, GameRuntimeConfig>` check in §2.1), no field-by-field translation is needed at the STDB handoff — the subtree is serialized as-is.
