@@ -438,7 +438,7 @@ Satisfies 02-REQ-034 through 02-REQ-037.
 export {
   Direction, CellType, ItemType, BoardSize, EffectFamily, EffectState,
   Cell, SnakeId, CentaurTeamId, ItemId, TurnNumber, UserId,
-  Agent, BOARD_DIMENSIONS, invulnerabilityLevel, isVisible,
+  Agent, BOARD_DIMENSIONS, invulnerabilityLevel, isVisible, fertileGroundEnabled,
   PotionEffect, SnakeState, ItemState, Board, CentaurTeamClockState,
   GameConfig, GameOrchestrationConfig, GameRuntimeConfig,
   GameOutcome, TurnEvent, DeathCause,
@@ -633,7 +633,7 @@ export {
   // Enums and branded types (01 §3.1)
   Direction, CellType, ItemType, BoardSize, EffectFamily, EffectState,
   Cell, SnakeId, CentaurTeamId, ItemId, TurnNumber, UserId, Agent,
-  BOARD_DIMENSIONS, invulnerabilityLevel, isVisible,
+  BOARD_DIMENSIONS, invulnerabilityLevel, isVisible, fertileGroundEnabled,
 
   // State shapes (01 §3.2)
   PotionEffect, SnakeState, ItemState, Board, CentaurTeamClockState,

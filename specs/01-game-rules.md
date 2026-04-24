@@ -194,7 +194,7 @@ Item collection (food, InvulnPotion, InvisPotion) is explicitly *not* a disrupti
 
 **01-REQ-047 (Phase 6 — Potion Collection)**: For each surviving snake whose head occupies a potion cell after Phase 2 movement, the potion is consumed. Phase 6 then aggregates by team and by potion family: for each team T and each family F such that at least one member of T consumed a potion of family F this turn, schedule the single team rebuild specified in 01-REQ-026 (for invulnerability) or 01-REQ-027 (for invisibility). The rebuild is recorded as per-member `pendingEffects` entries with a "replace on apply" marker at the family level, meaning Phase 9 (01-REQ-050) will remove any prior active or pending entry of the same family on each affected member before inserting the new one. Simultaneous multi-collection by the same team of the same family is collapsed into a single coherent rebuild: every collector-of-this-turn gets `state = debuff`, every non-collector alive teammate gets `state = buff`, and all affected members receive the same `expiryTurn = currentTurn + 3`. Potion collection is not a disruption (01-REQ-030).
 
-**01-REQ-048 (Phase 7 — Food Spawning)**: Food shall spawn each turn. The expected count is the configured `food.spawnRate` (a non-negative decimal; 0 means no food ever spawns). The guaranteed count is `floor(food.spawnRate)` items, with probability `food.spawnRate mod 1` of one additional item. Spawn locations are chosen randomly using the turn seed from eligible cells: inner, non-Wall, non-Hazard, and not currently occupied by a snake, food, or potion. If the board contains any cell of `CellType.Fertile`, eligible cells are further restricted to Fertile cells.
+**01-REQ-048 (Phase 7 — Food Spawning)**: Food shall spawn each turn. The expected count is the configured `food.spawnRate` (a non-negative decimal; 0 means no food ever spawns). The guaranteed count is `floor(food.spawnRate)` items, with probability `food.spawnRate mod 1` of one additional item. Spawn locations are chosen randomly using the turn seed from eligible cells: inner, non-Wall, non-Hazard, and not currently occupied by a snake, food, or potion. When `fertileGroundEnabled(board)` is true (Section 3.2), eligible cells are further restricted to Fertile cells.
 
 **01-REQ-049 (Phase 8 — Potion Spawning)**: InvulnPotions shall spawn each turn using `invulnPotions.spawnRate` by the same probabilistic mechanism and eligible-cell criteria as food; a spawn rate of 0 results in no invulnerability potions spawning. InvisPotions shall spawn independently each turn using `invisPotions.spawnRate` by the same mechanism; a spawn rate of 0 results in no invisibility potions spawning.
 
@@ -383,7 +383,13 @@ export function isInner(board: Board, cell: Cell): boolean {
 export function parityOf(cell: Cell): 0 | 1 {
   return ((cell.x + cell.y) & 1) as 0 | 1
 }
+
+export function fertileGroundEnabled(board: Board): boolean {
+  return board.cells.includes(CellType.Fertile)
+}
 ```
+
+`fertileGroundEnabled(board)` is the canonical predicate for whether fertile-ground food-eligibility restriction applies. Runtime consumers (Phase 7 food spawning per [01-REQ-048]) must derive the answer from the board rather than the config because `config.orchestration.fertileGround.density` is not forwarded to SpacetimeDB (see resolved [01-REVIEW-017]) — the board itself is the authoritative record of whether fertile-ground generation ran. The predicate is a pure function of `Board` and `Board.cells` is static for the lifetime of a game, so implementations may cache the result at init time; the observable value never changes across turns.
 
 Direction semantics:
 
@@ -737,6 +743,10 @@ function resolveTurn(state, T, turnSeed):
       pushPending(mate, { family, state: state_, expiryTurn: expiry })
 
   # ---------- Phase 7: Food Spawning (01-REQ-048) ----------
+  # `eligibleFoodCells(state)` restricts to Fertile cells iff
+  # `fertileGroundEnabled(state.board)` is true (Section 3.2). The derived
+  # predicate is a pure function of the board and may be cached at init time
+  # since the board never changes post-generation.
   rngP7 = rngFromSeed(subSeed(turnSeed, "phase-7-food"))
   spawnItems(state, ItemType.Food, config.food.spawnRate, rngP7, eligibleFoodCells(state))
 
@@ -1216,6 +1226,7 @@ export interface GameState {
 - `invulnerabilityLevel(snake) ∈ {-1, 0, +1}` and `isVisible(snake)` are pure O(k≤2) functions over `activeEffects`; they are the only reads collision resolution performs (01-REQ-022, 01-REQ-023, 01-REQ-044c, 01-REQ-044d).
 - Disruption of a debuff-holder cancels that family team-wide; other families are untouched (01-REQ-031). Both debuff-holders (invulnerability and invisibility) remain visible — the invisibility-family debuff-holder is explicitly visible to opponents as the targetable weak link for their team's invisibility buff.
 - Turn event ordering within a turn is deterministic: phase ascending, then `snakeId` ascending.
+- `fertileGroundEnabled(board)` is the canonical runtime predicate for whether Phase 7 food eligibility restricts to `CellType.Fertile` cells (01-REQ-048). The predicate is derived from the board — not the game config — because `config.orchestration.fertileGround` is not forwarded to STDB; the board's cells are the authoritative record (resolved 01-REVIEW-017). The value is constant for the lifetime of the game since the board is static after generation.
 
 ### 3.10 DOWNSTREAM IMPACT Notes
 
@@ -1651,7 +1662,7 @@ Option A was rejected because it retains the exact asymmetry and reducer problem
 **Affected requirements/design elements**:
 - **Section 3.3** rewritten to declare three exported types (`GameOrchestrationConfig`, `GameRuntimeConfig`, `GameConfig`), with a schema-mirroring constraint paragraph documenting the LCD rules for tri-runtime compatibility.
 - **Section 3.8** `generateBoardAndInitialState` signature retyped from `config: GameConfig` to `config: GameOrchestrationConfig`.
-- **01-REQ-048** rewritten: food eligibility at runtime conditions on the presence of `CellType.Fertile` cells in the board rather than on a config flag.
+- **01-REQ-048** rewritten: food eligibility at runtime conditions on `fertileGroundEnabled(board)` (the new exported predicate in Section 3.2) rather than on a config flag. The predicate is defined alongside the other exported board helpers (`cellIndex`, `isInner`, `parityOf`) and returns `board.cells.includes(CellType.Fertile)`; implementations may cache at init time since the board is static.
 - **01-REQ-049** rewritten: potion spawning always runs; spawn-rate 0 is the disabled sentinel.
 - **01-REQ-069** expanded: `fertileGround.density` range widens to `0–90` with `0` as the explicit disabled sentinel.
 - **01-REQ-070** loses the "only meaningful when enabled is true" qualifier; clustering has no effect when density is 0.
