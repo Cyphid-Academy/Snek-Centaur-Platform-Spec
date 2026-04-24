@@ -215,6 +215,8 @@ This module specifies the per-game runtime that authoritatively executes [01]'s 
 
 **04-REQ-070** *(negative)*: The runtime shall not treat any connection as having elevated privileges beyond those derived from its JWT `sub` claim role and CentaurTeam association. Captain status and other Convex-side operator role distinctions ([03], [08]) shall not be visible to or enforceable by the runtime. Spectator and coach connections (`sub` prefixes `"spectator:"` and `"coach:"`) shall be rejected by every state-mutating reducer; only `operator:` and `centaur:` connections may stage moves or otherwise mutate game state, and only on behalf of their bound team.
 
+**04-REQ-071**: For every turn `T` in `[0, latestCompletedTurn]`, the historical record shall contain exactly one scoreboard row per CentaurTeam in the game's roster — including teams whose alive-snake count for that turn is zero (zero-filled rather than omitted). Each row's aggregates (team score, alive-snake count, aggregate body length) shall be computed over the *true* alive-snake set for that team at the boundary between turn `T` and turn `T+1`, including snakes whose `visible` field per [04-REQ-047] is `false`. The visibility filter of [04-REQ-047] shall not apply to scoreboard rows: every connection (operator, Centaur Server, spectator, coach) shall observe the same scoreboard rows, since the rows expose only per-team aggregates and never per-snake state. Subscribed clients shall obtain these aggregates exclusively through the runtime's scoreboard subscription channel and shall not reconstruct them by aggregating per-snake subscription data, which would systematically under-count whenever an opponent snake is invisible. (Resolves 04-REVIEW-020; downstream of [08-REQ-084] / [08-REQ-084b].)
+
 ---
 
 ## Design
@@ -354,6 +356,22 @@ interface TurnEventRow {
 
 Grouped by `turn` (non-unique key; multiple rows per turn). Visible to all connections — turn events are not subject to visibility filtering (see §2.9 principle). Canonical ordering within a turn is not stored as a column — it is derived from the deterministic rules in Section 2.8 (phase ascending → event-type class → ascending snake/item ID).
 
+**`scoreboard`** — One row per CentaurTeam in the game's roster per turn. Materialised per-turn aggregate of team score, alive-snake count, and aggregate body length, computed over the *true* alive-snake set (including snakes whose `visible = false`). Resolves 04-REVIEW-020.
+
+```typescript
+interface ScoreboardRow {
+  readonly turn: number                   // TurnNumber
+  readonly centaurTeamId: string          // CentaurTeamId — Convex centaur_teams._id
+  readonly teamScore: number              // Σ body length of alive snakes for this team at turn boundary [01-REQ-053]
+  readonly aliveSnakeCount: number        // count of snakes with alive = true for this team at turn boundary
+  readonly aggregateLength: number        // Σ body length of alive snakes for this team at turn boundary
+}
+```
+
+Primary key: `(turn, centaurTeamId)`. Btree index on `(turn)` for live / historical / catch-up queries (§2.12). One row is written per CentaurTeam in the game's roster per turn — *including* CentaurTeams with `aliveSnakeCount = 0` (zero-filled rather than omitted, so subscribers always see a complete per-team view at every turn). The aggregate is computed over the true alive-snake set including invisible snakes; the visibility filter of [04-REQ-047] does not apply to `scoreboard` rows. `teamScore` and `aggregateLength` are published as separate columns even though they are equal under [01-REQ-053] today, so the wire shape remains stable if a future revision of [01] introduces a score-modifying bonus that decouples score from body length.
+
+The materialised per-turn `scoreboard` row is also the storage location for the prior-turn scores referenced by [01-REQ-055]'s simultaneous-elimination tiebreak: when Phase 10 of turn `T` needs the immediately preceding turn's per-team scores, it reads `scoreboard WHERE turn = T - 1` rather than maintaining a separate denormalised `previousTurnScores` field. (For the turn-0 simultaneous-elimination case of [01-REQ-056], scores are computed from initial snake lengths in `initialize_game`'s turn-0 `scoreboard` write — see §2.2.)
+
 #### 2.1.3 Participant Attribution Table
 
 **`centaur_team_permissions`** — One row per successfully admitted connection. Append-only (never deleted), retained for the full game lifetime [04-REQ-020, 04-REQ-021].
@@ -476,6 +494,7 @@ interface InitializeGameParams {
    - Insert one `item_lifetimes` row per initial item with `spawnTurn = 0` and `destroyedTurn = null`.
    - Insert one `time_budget_states` row per CentaurTeam for turn 0 with `remainingBudgetMs = runtime.clock.initialBudgetMs` [01-REQ-035].
    - Insert a `turns` row for turn 0 with `turnStartTimeMs` and `resolutionStartTimeMs` both set to the current wall-clock time (turn 0 has no distinct resolution phase — it represents the initial state).
+   - Insert one `scoreboard` row per CentaurTeam in the roster for turn 0, with `teamScore`, `aliveSnakeCount`, and `aggregateLength` computed by grouping the just-written turn-0 `snake_states` rows by `centaurTeamId` restricted to `alive = true`. Teams with no alive snakes at turn 0 are zero-filled (`aliveSnakeCount = 0`, `teamScore = 0`, `aggregateLength = 0`). The aggregate covers all snakes the team owns regardless of their `visible` field. (Resolves 04-REVIEW-020 for the turn-0 path; see also §2.7 for the per-turn-resolution path.)
 5. **Initialize runtime state**: Insert `game_runtime` row with `initialized = true`, `gameEnded = false`, `currentTurn = 0`, `turnStartTimeMs` = current wall-clock time.
 6. **Initialize per-turn working state**: Insert one `centaur_team_turn_state` row per CentaurTeam with `declaredTurnOver = false` and `remainingClockMs = min(runtime.clock.firstTurnTimeMs, runtime.clock.initialBudgetMs + runtime.clock.budgetIncrementMs)` per [01-REQ-037].
 7. **Schedule turn-0 clock expiry** (Section 2.6): Schedule the `check_clock_expiry` reducer to fire at `turnStartTimeMs + remainingClockMs` for the CentaurTeam with the maximum remaining clock (or the common first-turn clock if all CentaurTeams have the same budget).
@@ -677,6 +696,24 @@ reducer resolve_turn():
     insert time_budget_states row for turn T
   insert turns row for turn T (turnStartTimeMs, resolutionStartTimeMs)
 
+  // — Step 6b: Materialise per-team scoreboard for turn T+1 [04-REQ-071] —
+  // Group the just-written turn-(T+1) snake_states rows by centaurTeamId restricted
+  // to alive = true. Insert one scoreboard row per CentaurTeam in the game's roster
+  // for turn T+1; zero-fill (teamScore = aliveSnakeCount = aggregateLength = 0) for
+  // teams with no alive snakes. The aggregate covers all of a team's snakes regardless
+  // of their visible field — the scoreboard is exempt from the visibility filter of
+  // [04-REQ-047]. This costs O(snakes) per turn and is performed inside the same
+  // resolve_turn ACID transaction so subscribers observe the new snake_states and the
+  // matching scoreboard row atomically. (Resolves 04-REVIEW-020.)
+  for each centaurTeamId in centaur_team_roster:
+    aliveForTeam = result.nextState.snakes
+                     .filter(s => s.centaurTeamId === centaurTeamId && s.alive)
+    aggregateLength = aliveForTeam.reduce((sum, s) => sum + s.body.length, 0)
+    insert scoreboard row for turn T+1:
+      teamScore       = aggregateLength    // [01-REQ-053] — currently equal
+      aliveSnakeCount = aliveForTeam.length
+      aggregateLength = aggregateLength
+
   // — Step 7: Advance turn [04-REQ-042] —
   T_next = T + 1
 
@@ -711,6 +748,8 @@ reducer resolve_turn():
 **GameState assembly**: Module 01's `GameState` aggregate shape is exported as `interface GameState { board, snakes, items, clocks }` ([01] DOWNSTREAM IMPACT note 8; see resolved 01-REVIEW-013). This module assembles the exported `GameState` from table rows: `board: Board` from `board_state`; `snakes: ReadonlyArray<SnakeState>` from the latest `snake_states` rows (turn T); `items: ReadonlyArray<ItemState>` from active `item_lifetimes` rows (spawnTurn ≤ T AND destroyedTurn IS NULL or > T); `clocks: ReadonlyArray<CentaurTeamClockState>` from `centaur_team_turn_state` combined with `time_budget_states`. The field names and types align exactly with Module 01's exported interface.
 
 **Determinism** [04-REQ-069]: Given identical game seeds, configurations, and staged-move sequences, `resolveTurn()` produces identical results because (a) the shared engine's turn resolution is a pure function of its inputs, (b) all randomness is seed-derived via `subSeed()` and `rngFromSeed()`, and (c) the staged-move map is assembled deterministically from the table.
+
+**Prior-turn scores for simultaneous-elimination tiebreak**: When the eleven-phase pipeline's Phase 10 needs the immediately preceding turn's per-team scores to evaluate the simultaneous-elimination branch of [01-REQ-055], the reducer reads them directly from `scoreboard WHERE turn = T - 1` and passes them in to the shared engine call (Step 4). No separate `previousTurnScores` field is denormalised onto another row; the materialised `scoreboard` table is the single storage location for prior-turn aggregates, consistent with §2.1.2. For the turn-0 simultaneous-elimination case ([01-REQ-056]), the prior-turn scores fall back to the turn-0 `scoreboard` row written by `initialize_game` (§2.2), which records initial snake-length aggregates.
 
 ---
 
@@ -816,9 +855,23 @@ Clients subscribe to `staged_moves_view` instead of the raw `staged_moves` table
 
 The `centaur_team_permissions` table is declared as **private** (omitting `public: true` in the table decorator). Private tables are invisible to all client subscriptions — no client can subscribe to or query this table. Connection-to-CentaurTeam mappings are internal attribution data with no legitimate client use case. The module owner (Convex, authenticated with a management JWT) bypasses private-table restrictions and reads this table at game end for replay export; no other caller requires access.
 
+**`scoreboard_view`** (`ViewContext` query-builder view over `scoreboard`):
+
+The view is a trivial unfiltered projection — semantically equivalent to:
+
+```sql
+SELECT * FROM scoreboard
+```
+
+There is no `ctx.sender` predicate: every connection (operator, Centaur Server, spectator, coach) sees the same `scoreboard` rows for every turn. The view exists as a thin `ctx.from` wrapper purely to keep the client-facing subscription surface uniform with `snake_states_view` / `staged_moves_view` and to remain forward-compatible with planned IVM optimisations on the `ctx.from` path (§2.9 introduction).
+
+**Why aggregation is materialised at write time rather than expressed inside the view**: The View capability surface available to this module is filter / projection only. The `ctx.from` query-builder path supports `WHERE` predicates over a single table (with simple `EXISTS` subqueries against indexed columns) but does not support `GROUP BY` or aggregate functions, so a `SELECT centaurTeamId, SUM(body_length), COUNT(*) FROM snake_states_view WHERE alive AND turn = T GROUP BY centaurTeamId` shape cannot be expressed as a `ctx.from` view. The alternative path — `ctx.db` procedural views — does support arbitrary TypeScript aggregation, but it forfeits IVM compatibility entirely (the runtime tracks an indexed-read set and re-executes the whole view body on every dependent-table change), which §2.9 has explicitly chosen against for visibility-critical channels. Materialising the per-team aggregates inside `resolve_turn` (§2.7, Step 6b) costs `O(snakes)` once per turn — the alive-snake set is already in hand at the end of Phase 10 — and turns the subscription channel into the kind of filtered projection that the chosen `ctx.from` view surface handles natively. It also keeps the score-authority story single-sourced: the row a spectator subscribes to is exactly the row the resolving transaction wrote, with no derivation step downstream.
+
+Clients subscribe to `scoreboard_view` rather than the raw `scoreboard` table for all subscription patterns in §2.12. The aggregates published by this view are computed over the *true* alive-snake set including invisible snakes per [04-REQ-047]; the visibility-bypass posture is pinned by [04-REQ-071] (§4.13).
+
 **Unfiltered public tables** (no view needed):
 
-`turn_events`, `item_lifetimes`, `game_config`, `board_state`, `centaur_team_roster`, `game_runtime`, `turns`, `time_budget_states` — remain public tables. Clients subscribe directly to these tables. Turn events describe game-board effects and are not filtered based on snake visibility. Item consumption is a game-board effect visible to all observers. Per the invisibility principle, only the snake's own state record is hidden — not the observable consequences of its actions.
+`turn_events`, `item_lifetimes`, `game_config`, `board_state`, `centaur_team_roster`, `game_runtime`, `turns`, `time_budget_states` — remain public tables. Clients subscribe directly to these tables. Turn events describe game-board effects and are not filtered based on snake visibility. Item consumption is a game-board effect visible to all observers. Per the invisibility principle, only the snake's own state record is hidden — not the observable consequences of its actions. The `scoreboard` table is also conceptually unfiltered (every connection sees every row), but is exposed via the trivial `scoreboard_view` wrapper above for surface-uniformity with the other view-mediated tables.
 
 #### 2.9.2 Required Indexes for View Query Performance
 
@@ -830,6 +883,9 @@ The `ctx.from` query-builder views emit SQL queries with WHERE clauses and subqu
 | `snake_states.centaurTeamId` | `snake_states` | `centaurTeamId` | `snake_states_view` WHERE clause: filter by CentaurTeam |
 | `snake_states.visible` | `snake_states` | `visible` | `snake_states_view` WHERE clause: filter visible opponent snakes |
 | `staged_moves.snakeId` | `staged_moves` | `snakeId` | `staged_moves_view` EXISTS subquery: join to `snake_states` |
+| `scoreboard.turn` | `scoreboard` | `turn` | `scoreboard_view` subscription queries: live (`WHERE turn = currentTurn`), historical scrub (`WHERE turn = T`), and bulk catch-up (§2.12). |
+
+The `scoreboard` table additionally has a primary-key index on `(turn, centaurTeamId)` (§2.1.2) which serves point lookups used by §2.7's prior-turn-score read for the simultaneous-elimination tiebreak.
 
 Without these indexes, the emitted SQL queries would require full table scans on every dependent-table change, degrading performance proportionally to table size.
 
@@ -862,7 +918,7 @@ The `game_end_notification_schedule` schedule table drives the `notify_game_end`
 The `notify_game_end` **scheduled procedure**:
 1. Reads `game_config.gameEndCallbackUrl` (the Convex HTTP action URL registered at init time).
 2. Reads `game_config.gameOutcomeCallbackToken` (the Convex-signed JWT provided at init time).
-3. For normal outcomes (victory, draw): reads all replay tables (Section 2.11) — `game_config`, `board_state`, `centaur_team_roster`, `centaur_team_permissions`, `turns`, `snake_states`, `item_lifetimes`, `staged_moves`, `time_budget_states`, `turn_events` — and bundles them into a `replayData` object. For error outcomes: sets `replayData` to `null`.
+3. For normal outcomes (victory, draw): reads all replay tables (Section 2.11) — `game_config`, `board_state`, `centaur_team_roster`, `centaur_team_permissions`, `turns`, `snake_states`, `item_lifetimes`, `staged_moves`, `time_budget_states`, `turn_events`, `scoreboard` — and bundles them into a `replayData` object. For error outcomes: sets `replayData` to `null`.
 4. Constructs the `GameEndNotification` payload (Section 3.3) including `replayData`.
 5. Sends an HTTP POST to `gameEndCallbackUrl` via `ctx.http.fetch()` with the notification payload as a JSON request body and the `gameOutcomeCallbackToken` as a Bearer token in the Authorization header.
 6. On HTTP failure (non-2xx response or network error): retries with exponential backoff (initial delay 1s, max 3 retries). If all retries fail, the notification is lost but the game state remains correct — Convex can detect stale games via polling as a fallback.
@@ -903,8 +959,9 @@ The complete historical record is bundled into the `GameEndNotification` payload
 8. `staged_moves` — complete append-only staged-move history across all turns, including per-entry agent attribution and timestamps [04-REQ-025, 04-REQ-027]. Entries enable downstream systems ([06], [08]) to reconstruct which moves were staged by whom at any sub-turn timestamp.
 9. `time_budget_states` — all per-turn per-CentaurTeam budget records.
 10. `turn_events` — all turn events across all turns.
+11. `scoreboard` — all per-turn per-CentaurTeam materialised aggregate rows (one row per CentaurTeam in the roster per turn `T ∈ [0, latestCompletedTurn]`, including zero-filled rows for teams with no alive snakes), so the materialised aggregates ship with the replay payload and downstream replay viewers can render scoreboards without recomputing them.
 
-**Visibility filtering bypass**: The procedure executes within the STDB module and reads tables directly — no visibility filtering applies. The procedure has unrestricted access to all tables including private tables (such as `centaur_team_permissions`) and the raw underlying tables behind views (bypassing `snake_states_view` and `staged_moves_view`). The complete unfiltered record — including all invisible snakes' `snake_states` rows, `centaur_team_permissions`, and the complete append-only `staged_moves` history — is included.
+**Visibility filtering bypass**: The procedure executes within the STDB module and reads tables directly — no visibility filtering applies. The procedure has unrestricted access to all tables including private tables (such as `centaur_team_permissions`) and the raw underlying tables behind views (bypassing `snake_states_view`, `staged_moves_view`, and `scoreboard_view`). The complete unfiltered record — including all invisible snakes' `snake_states` rows, `centaur_team_permissions`, the complete append-only `staged_moves` history, and the full per-turn `scoreboard` rows — is included.
 
 **Data completeness**: The exported record is sufficient to reconstruct a complete replay of the game [04-REQ-012]. Because `stagedBy` fields already carry `agentId` values (resolved at connection time per 04-REQ-020), no Identity→agent resolution step is required during export [04-REQ-061].
 
@@ -928,8 +985,9 @@ Subscribe to:
 - `board_state` — static board (initial delivery only).
 - `game_runtime` — current turn number (triggers re-evaluation of the above queries when currentTurn changes).
 - `centaur_team_turn_state` — per-CentaurTeam declaration status for clock display.
+- `scoreboard_view WHERE turn = game_runtime.currentTurn` — per-team aggregate scoreboard for the current turn (one row per CentaurTeam in the roster, computed over the true alive-snake set including invisible snakes per [04-REQ-071]).
 
-When a new turn commits, the client receives updated `snake_states_view` and `item_lifetimes` rows for the new turn, plus the updated `game_runtime.currentTurn`.
+When a new turn commits, the client receives updated `snake_states_view`, `item_lifetimes`, and `scoreboard_view` rows for the new turn, plus the updated `game_runtime.currentTurn`.
 
 #### 2.12.2 Historical Scrubbing
 
@@ -938,6 +996,7 @@ Point-in-time query by turn number T:
 - `item_lifetimes WHERE spawnTurn <= T AND (destroyedTurn IS NULL OR destroyedTurn > T)` — items present at turn T.
 - `time_budget_states WHERE turn = T` — CentaurTeam budgets at turn T.
 - `turn_events WHERE turn = T` — events from turn T's resolution.
+- `scoreboard_view WHERE turn = T` — per-team aggregate scoreboard at turn T's boundary.
 
 All subject to visibility filtering via Views (Section 2.9) [04-REQ-048]. No game logic re-execution required [04-REQ-058].
 
@@ -956,8 +1015,9 @@ A client connecting mid-game subscribes to all historical tables:
 - `turns` (all rows) — turn timing.
 - `time_budget_states` (all turns) — budget history.
 - `turn_events` (all turns) — complete event history.
+- `scoreboard_view` (all turns) — complete per-team aggregate scoreboard history.
 
-Clients must never subscribe directly to raw `snake_states` or `staged_moves` tables — only the corresponding visibility Views are permitted for client subscriptions.
+Clients must never subscribe directly to raw `snake_states`, `staged_moves`, or `scoreboard` tables — only the corresponding views (`snake_states_view`, `staged_moves_view`, `scoreboard_view`) are permitted for client subscriptions. Clients must additionally never reconstruct team-level aggregate quantities (team score, alive-snake count, aggregate body length, win-condition state, or any analogous aggregate) by aggregating `snake_states_view` rows on the client side; `scoreboard_view` is the sole sanctioned channel for those aggregates and is the only channel that publishes contributions from invisible snakes (which `snake_states_view` filters out for non-allied subscribers per [04-REQ-047]). Client-side aggregation of `snake_states_view` would systematically under-count whenever an opponent snake is invisible.
 
 SpacetimeDB delivers the initial snapshot as a bulk delivery, then switches to incremental updates as new turns commit. The client can render from turn 0 forward or jump to the current turn.
 
@@ -1101,6 +1161,7 @@ interface ReplayData {
   readonly staged_moves: ReadonlyArray<StagedMoveRow>
   readonly time_budget_states: ReadonlyArray<TimeBudgetStateRow>
   readonly turn_events: ReadonlyArray<TurnEventRow>
+  readonly scoreboard: ReadonlyArray<ScoreboardRow>
 }
 
 type GameOutcome =
@@ -1459,11 +1520,17 @@ The WASM binary encapsulates the complete game engine module: all table schemas,
 
 ---
 
-### 04-REVIEW-020: Spectator/operator scoreboard view
+### 04-REVIEW-020: Spectator/operator scoreboard view — **RESOLVED**
 
 **Type**: Gap
 **Phase**: Design
 **Context**: 08-REVIEW-018 (resolved) pins the principle that client UIs render team-level aggregate quantities (team score, alive-snake count, aggregate length) as delivered by purpose-built SpacetimeDB views and never reconstruct them client-side from raw per-snake subscription data. This is necessary so that invisibility (per [04-REQ-047]) cannot leak through omitted client-side contributions and so that score authority is single-sourced server-side. [08-REQ-084] (amended) now requires that the spectator scoreboard be sourced from a dedicated SpacetimeDB scoreboard view; [08-REQ-084b] (added, negative) forbids client-side aggregation. [04] Phase 2 §2.9 (visibility filtering / RLS) and §2.12 (subscription patterns) currently do not specify a `scoreboard_view`. This item exists so the gap is not lost.
 **Question**: Add a per-game `scoreboard_view` (or equivalent) to the [04] design that publishes per-team aggregates `(teamId, teamScore, aliveSnakeCount, aggregateLength)` computed server-side over the true alive-snake set (including invisible snakes), subscribable by spectator and operator clients alike, and exposing only the aggregates — never per-snake state for invisible snakes.
 **Informal spec reference**: N/A (downstream impact from 08-REVIEW-018).
+
+**Decision**: Add a materialised per-turn `scoreboard` table written transactionally inside `resolve_turn` (and at `initialize_game` for turn 0), exposed to all connections via a trivial unfiltered `scoreboard_view` (`SELECT * FROM scoreboard`, no `ctx.sender` predicate). Row shape `(turn, centaurTeamId, teamScore, aliveSnakeCount, aggregateLength)`, primary key `(turn, centaurTeamId)`, btree index on `(turn)`. One row is written per CentaurTeam in the game's roster per turn — including zero-filled rows for teams with no alive snakes — and the aggregate is computed over the *true* alive-snake set including invisible snakes per [04-REQ-047]. The previously-implicit `previousTurnScores` denormalisation is retired: [01-REQ-055]'s simultaneous-elimination tiebreak reads prior-turn scores from `scoreboard WHERE turn = T - 1`. Replay export (§2.10, §2.11, §3.3 `ReplayData`) bundles the `scoreboard` table alongside the other historical tables. The visibility-bypass posture is pinned by a new invariant 04-REQ-071 in §4.13.
+
+**Rationale**: The View capability surface §2.9 commits to is filter / projection only on the IVM-compatible `ctx.from` query-builder path; `GROUP BY` and aggregate functions over `snake_states` cannot be expressed there. The alternative `ctx.db` procedural path supports arbitrary aggregation but forfeits the IVM-compatibility posture §2.9 has explicitly chosen against, since it re-executes the full view body on every dependent-table change. Materialising the per-team aggregate inside `resolve_turn` costs `O(snakes)` once per turn — the alive-snake set is already in hand at the end of Phase 10 — and reduces the subscription channel to the kind of filtered projection the chosen `ctx.from` view surface handles natively. Single-sourcing the row at write time also keeps score authority unambiguous: the row a spectator subscribes to is exactly the row the resolving transaction wrote, with no derivation step downstream. Publishing `teamScore` and `aggregateLength` as separate columns (despite their being equal under [01-REQ-053] today) is a wire-shape concession to a possible future score-modifying bonus in [01]; this REVIEW item does not introduce one.
+
+**Affected requirements/design elements**: New requirement 04-REQ-071 (§4.13). Design additions: `scoreboard` table (§2.1.2); turn-0 scoreboard write in `initialize_game` step 4 (§2.2); per-turn scoreboard write as Step 6b of `resolve_turn` (§2.7); prior-turn-score read narrative in §2.7; `scoreboard_view` definition and aggregation-at-write-time rationale in §2.9.1; index entries in §2.9.2; subscription bullets in §2.12.1, §2.12.2, §2.12.4, plus the §2.12.4 closing negative on client-side aggregation; replay-bundling additions in §2.10 and §2.11; `ReplayData.scoreboard` in §3.3. Cross-module: Module 08 §2.14's spectator-subscription bullet updated to align row-shape spelling (`centaurTeamId`) with this module; 08-REQ-084 / 08-REQ-084b remain unchanged in substance — the row shape and the channel name they reference now exist.
 
