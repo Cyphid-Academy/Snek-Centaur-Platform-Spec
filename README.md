@@ -60,15 +60,22 @@ movement → collision detection → effect scheduling → health/hazards/food
 application → win check → event emission). Real-time state synchronisation
 to all connected clients is automatic via subscription queries.
 
-The schema is **append-only and turn-keyed**: snake states, item
-lifetimes, time budgets, and turn events are written as new rows per turn,
-never mutated. Any historical board state is reconstructable by querying
+The historical record is **turn-keyed and append-only** — snake states,
+time budgets, and turn events are written as new rows per turn and never
+mutated, with a single documented exception: an item's `item_lifetimes`
+row has its `destroyedTurn` field set from `null` to the turn it was
+consumed (the row is written once at spawn, then sealed once at
+destruction). Any historical board state is reconstructable by querying
 with the appropriate turn number, which is what enables both client-side
 timeline scrubbing and end-of-game replay export with no per-turn posting
 to Convex during play. **Invisibility is enforced at the data layer via
-Row Level Security** — invisible snakes still collide, sever, and score
-identically to visible snakes server-side; opponents simply do not receive
-those rows. Specified in [`specs/04-stdb-engine.md`](specs/04-stdb-engine.md).
+Row Level Security** — opponents do not receive the `snake_states` rows
+of an invisible snake, but every other consequence of that snake's
+actions (the food it eats disappearing from the board, the turn events it
+participates in, the scoreboard totals it contributes to) remains visible
+to all observers exactly as for any other snake. Game mechanics apply
+symmetrically server-side; invisibility is purely an asymmetric view onto
+a single row. Specified in [`specs/04-stdb-engine.md`](specs/04-stdb-engine.md).
 
 ### Convex (global, persistent)
 
